@@ -15,6 +15,27 @@
 
 <body>
     <div class="skill-tree-wrapper">
+        <!-- Header Controls -->
+        <div class="header-controls">
+            <button id="resetBtn" class="header-btn">RESET</button>
+            <button id="shareBtn" class="header-btn">SHARE</button>
+            <div id="pointsCounter" class="points-counter">
+                <span id="pointsRemaining">76</span> / <span id="maxPoints">76</span>
+                <div id="pointsPopup" class="points-popup">
+                    <div class="popup-title">Edit max points</div>
+                    <div class="popup-controls">
+                        <button id="decreaseMaxBtn" class="popup-btn">−</button>
+                        <input type="number" id="maxPointsInput" value="76" min="1">
+                        <button id="increaseMaxBtn" class="popup-btn">+</button>
+                    </div>
+                    <div class="popup-hint">
+                        <div>Lvl 75: 76 points</div>
+                        <div>Lvl 75 + Expedition 5 points: 81 points</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
         <canvas id="skillTreeCanvas"></canvas>
 
         <!-- Branch Labels are now drawn on Canvas for proper pan/zoom -->
