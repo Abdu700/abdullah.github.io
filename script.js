@@ -152,6 +152,16 @@ let dragStart = { x: 0, y: 0 };
 let hoveredNode = null;
 let loadedImages = {};
 
+// === TOUCH STATE (Mobile only - does not affect PC) ===
+let touchStartPos = null;
+let touchStartTime = 0;
+let longPressTimeout = null;
+let isTouchPanning = false;
+let initialPinchDistance = 0;
+let lastTouchCenter = null;
+const LONG_PRESS_DURATION = 500; // ms for right-click equivalent
+const TAP_THRESHOLD = 10; // pixels movement to still count as tap
+
 // Tree layout constants
 const TREE_WIDTH = 1392;
 const TREE_HEIGHT = 613;
@@ -641,27 +651,33 @@ function drawNode(skill, category) {
     }
 
     // Lock icon for locked skills with point requirements
+    // Only show lock if the required points are NOT yet met
     if (isLocked && s.requiredPoints !== null) {
-        const lockX = x - size + 8;
-        const lockY = y + size - 17;
+        const categoryPoints = getPointsBeforeLevel(s.category, s.level);
+        const pointsNotMet = categoryPoints < s.requiredPoints;
 
-        ctx.fillStyle = COLORS.disabled;
-        ctx.beginPath();
-        ctx.arc(lockX, lockY, 10, 0, Math.PI * 2);
-        ctx.fill();
+        if (pointsNotMet) {
+            const lockX = x - size + 8;
+            const lockY = y + size - 17;
 
-        ctx.strokeStyle = COLORS.disabled;
-        ctx.lineWidth = 2;
-        ctx.stroke();
+            ctx.fillStyle = COLORS.disabled;
+            ctx.beginPath();
+            ctx.arc(lockX, lockY, 10, 0, Math.PI * 2);
+            ctx.fill();
 
-        // Lock symbol
-        ctx.fillStyle = COLORS.skillBg;
-        ctx.fillRect(lockX - 5, lockY - 2, 10, 8);
-        ctx.strokeStyle = COLORS.skillBg;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(lockX, lockY - 5, 4, Math.PI, 0, false);
-        ctx.stroke();
+            ctx.strokeStyle = COLORS.disabled;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // Lock symbol
+            ctx.fillStyle = COLORS.skillBg;
+            ctx.fillRect(lockX - 5, lockY - 2, 10, 8);
+            ctx.strokeStyle = COLORS.skillBg;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(lockX, lockY - 5, 4, Math.PI, 0, false);
+            ctx.stroke();
+        }
     }
 
     ctx.restore();
@@ -753,6 +769,7 @@ function getNodeAt(clientX, clientY) {
 }
 
 function showTooltip(skill) {
+    const s = state.skills[skill.id];
     const w = window.innerWidth;
     const h = window.innerHeight;
     const tx = (w - TREE_WIDTH * scale) / 2 + offsetX;
@@ -762,7 +779,19 @@ function showTooltip(skill) {
     const nodeY = (skill.y + NODE_OFFSET_Y) * scale + ty;
 
     tooltipName.textContent = skill.name;
-    tooltipDesc.textContent = skill.description;
+
+    // Build description with required points hint for locked nodes
+    let description = skill.description;
+    const nodeState = getNodeState(skill);
+
+    if (nodeState === 'locked' && s.requiredPoints !== null) {
+        const categoryPoints = getPointsBeforeLevel(s.category, s.level);
+        if (categoryPoints < s.requiredPoints) {
+            description += `\n\nRequires ${s.requiredPoints} points in ${s.category} (${categoryPoints}/${s.requiredPoints})`;
+        }
+    }
+
+    tooltipDesc.textContent = description;
 
     const isLarge = skill.level === 0 || (skill.maxPoints === 1 && skill.requiredPoints !== null);
     const size = isLarge ? 35 : 20;
@@ -826,6 +855,8 @@ canvas.addEventListener('click', (e) => {
         state.pointsSpent[s.category]++;
         draw();
         showTooltip(node);
+        updatePointsDisplay();
+        updateURL();
     }
 });
 
@@ -838,6 +869,8 @@ canvas.addEventListener('contextmenu', (e) => {
         state.pointsSpent[s.category]--;
         draw();
         showTooltip(node);
+        updatePointsDisplay();
+        updateURL();
     }
 });
 
@@ -877,13 +910,410 @@ canvas.addEventListener('mouseleave', () => {
     draw();
 });
 
+// === TOUCH EVENT HANDLERS (Mobile only - does not affect PC mouse events) ===
+
+// Helper: Get distance between two touch points
+function getTouchDistance(touch1, touch2) {
+    const dx = touch1.clientX - touch2.clientX;
+    const dy = touch1.clientY - touch2.clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+}
+
+// Helper: Get center point between two touches
+function getTouchCenter(touch1, touch2) {
+    return {
+        x: (touch1.clientX + touch2.clientX) / 2,
+        y: (touch1.clientY + touch2.clientY) / 2
+    };
+}
+
+canvas.addEventListener('touchstart', (e) => {
+    e.preventDefault(); // Prevent scrolling
+
+    if (e.touches.length === 1) {
+        // Single touch - could be tap, long-press, or pan start
+        const touch = e.touches[0];
+        touchStartPos = { x: touch.clientX, y: touch.clientY };
+        touchStartTime = Date.now();
+        isTouchPanning = false;
+
+        // Start long-press detection for right-click equivalent
+        longPressTimeout = setTimeout(() => {
+            const node = getNodeAt(touchStartPos.x, touchStartPos.y);
+            if (node && canDowngrade(node)) {
+                const s = state.skills[node.id];
+                s.currentLevel--;
+                state.pointsSpent[s.category]--;
+                draw();
+                updatePointsDisplay();
+                updateURL();
+                // Vibrate for feedback if available
+                if (navigator.vibrate) navigator.vibrate(50);
+            }
+            touchStartPos = null; // Consumed by long-press
+        }, LONG_PRESS_DURATION);
+
+    } else if (e.touches.length === 2) {
+        // Two-finger touch - pinch to zoom
+        clearTimeout(longPressTimeout);
+        touchStartPos = null;
+        initialPinchDistance = getTouchDistance(e.touches[0], e.touches[1]);
+        lastTouchCenter = getTouchCenter(e.touches[0], e.touches[1]);
+    }
+}, { passive: false });
+
+canvas.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+
+    if (e.touches.length === 1 && touchStartPos) {
+        const touch = e.touches[0];
+        const dx = touch.clientX - touchStartPos.x;
+        const dy = touch.clientY - touchStartPos.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+
+        // If moved beyond threshold, cancel long-press and start panning
+        if (distance > TAP_THRESHOLD) {
+            clearTimeout(longPressTimeout);
+
+            if (!isTouchPanning) {
+                // Start panning from current position
+                isTouchPanning = true;
+                dragStart = { x: touch.clientX - offsetX, y: touch.clientY - offsetY };
+            } else {
+                // Continue panning
+                offsetX = touch.clientX - dragStart.x;
+                offsetY = touch.clientY - dragStart.y;
+                draw();
+            }
+        }
+
+    } else if (e.touches.length === 2 && initialPinchDistance > 0) {
+        // Pinch to zoom
+        const currentDistance = getTouchDistance(e.touches[0], e.touches[1]);
+        const currentCenter = getTouchCenter(e.touches[0], e.touches[1]);
+
+        // Calculate zoom
+        const zoomFactor = currentDistance / initialPinchDistance;
+        const newScale = Math.max(0.5, Math.min(2.5, scale * zoomFactor));
+
+        if (newScale !== scale) {
+            // Zoom towards pinch center
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+            const oldTx = (w - TREE_WIDTH * scale) / 2 + offsetX;
+            const oldTy = (h - TREE_HEIGHT * scale) / 2 + offsetY;
+            const treeX = (currentCenter.x - oldTx) / scale;
+            const treeY = (currentCenter.y - oldTy) / scale;
+
+            const newTx = currentCenter.x - treeX * newScale;
+            const newTy = currentCenter.y - treeY * newScale;
+
+            offsetX = newTx - (w - TREE_WIDTH * newScale) / 2;
+            offsetY = newTy - (h - TREE_HEIGHT * newScale) / 2;
+            scale = newScale;
+            draw();
+        }
+
+        // Also allow panning while zooming
+        if (lastTouchCenter) {
+            offsetX += currentCenter.x - lastTouchCenter.x;
+            offsetY += currentCenter.y - lastTouchCenter.y;
+        }
+
+        initialPinchDistance = currentDistance;
+        lastTouchCenter = currentCenter;
+    }
+}, { passive: false });
+
+canvas.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    clearTimeout(longPressTimeout);
+
+    // Check if this was a quick tap (not a pan or long-press)
+    if (touchStartPos && !isTouchPanning) {
+        const tapDuration = Date.now() - touchStartTime;
+
+        if (tapDuration < LONG_PRESS_DURATION) {
+            // This is a tap - add skill point (left-click equivalent)
+            const node = getNodeAt(touchStartPos.x, touchStartPos.y);
+            if (node && canUpgrade(node)) {
+                const s = state.skills[node.id];
+                s.currentLevel++;
+                state.pointsSpent[s.category]++;
+                draw();
+                updatePointsDisplay();
+                updateURL();
+            }
+        }
+    }
+
+    // Reset touch state
+    touchStartPos = null;
+    isTouchPanning = false;
+    initialPinchDistance = 0;
+    lastTouchCenter = null;
+});
+
+canvas.addEventListener('touchcancel', (e) => {
+    clearTimeout(longPressTimeout);
+    touchStartPos = null;
+    isTouchPanning = false;
+    initialPinchDistance = 0;
+    lastTouchCenter = null;
+});
+
+// === UI CONTROLS (Reset, Share, Points Counter) ===
+
+// DOM Elements
+const resetBtn = document.getElementById('resetBtn');
+const shareBtn = document.getElementById('shareBtn');
+const pointsCounter = document.getElementById('pointsCounter');
+const pointsPopup = document.getElementById('pointsPopup');
+const pointsRemainingEl = document.getElementById('pointsRemaining');
+const maxPointsEl = document.getElementById('maxPoints');
+const maxPointsInput = document.getElementById('maxPointsInput');
+const decreaseMaxBtn = document.getElementById('decreaseMaxBtn');
+const increaseMaxBtn = document.getElementById('increaseMaxBtn');
+
+// Skill ID to letter encoding (for URL sharing)
+const SKILL_IDS = [];
+for (const [category, data] of Object.entries(SKILL_DATA)) {
+    for (const skill of data.skills) {
+        SKILL_IDS.push(skill.id);
+    }
+}
+SKILL_IDS.sort();
+
+function getSkillLetter(skillId) {
+    const index = SKILL_IDS.indexOf(skillId);
+    if (index < 26) {
+        return String.fromCharCode(97 + index);
+    } else {
+        const first = String.fromCharCode(97 + Math.floor((index - 26) / 26));
+        const second = String.fromCharCode(97 + (index - 26) % 26);
+        return first + second;
+    }
+}
+
+function getSkillFromLetter(letter) {
+    let index;
+    if (letter.length === 1) {
+        index = letter.charCodeAt(0) - 97;
+    } else {
+        index = 26 + (letter.charCodeAt(0) - 97) * 26 + (letter.charCodeAt(1) - 97);
+    }
+    return SKILL_IDS[index] || null;
+}
+
+// Encode current skill state to URL string
+function encodeSkillState() {
+    const parts = [];
+
+    // Get skills with points, sorted by letter
+    const skillsWithPoints = Object.values(state.skills)
+        .filter(s => s.currentLevel > 0)
+        .sort((a, b) => getSkillLetter(a.id).localeCompare(getSkillLetter(b.id)));
+
+    for (const skill of skillsWithPoints) {
+        parts.push(getSkillLetter(skill.id) + skill.currentLevel);
+    }
+
+    let buildStr = parts.join('');
+
+    // Add max points if not default
+    if (state.maxTotalPoints !== 76) {
+        buildStr += '_m' + state.maxTotalPoints;
+    }
+
+    return buildStr;
+}
+
+// Decode URL string to restore skill state
+function decodeSkillState(buildStr) {
+    if (!buildStr || buildStr.trim() === '') return false;
+
+    // Check for max points modifier
+    const maxMatch = buildStr.match(/_m(\d+)$/);
+    if (maxMatch) {
+        state.maxTotalPoints = parseInt(maxMatch[1], 10);
+        buildStr = buildStr.replace(/_m\d+$/, '');
+    }
+
+    // Parse skill levels
+    const regex = /([a-z]{1,2})(\d+)/g;
+    let match;
+
+    while ((match = regex.exec(buildStr)) !== null) {
+        const letter = match[1];
+        const level = parseInt(match[2], 10);
+        const skillId = getSkillFromLetter(letter);
+
+        if (skillId && state.skills[skillId]) {
+            const skill = state.skills[skillId];
+            const safeLevel = Math.min(level, skill.maxPoints);
+            skill.currentLevel = safeLevel;
+            state.pointsSpent[skill.category] += safeLevel;
+        }
+    }
+
+    return true;
+}
+
+// Reset all skills
+function resetSkillTree() {
+    for (const skill of Object.values(state.skills)) {
+        skill.currentLevel = 0;
+    }
+    state.pointsSpent = { Conditioning: 0, Mobility: 0, Survival: 0 };
+    draw();
+    updatePointsDisplay();
+    updateURL();
+}
+
+// Update the points counter display
+function updatePointsDisplay() {
+    const totalSpent = state.pointsSpent.Conditioning +
+        state.pointsSpent.Mobility +
+        state.pointsSpent.Survival;
+    const remaining = state.maxTotalPoints - totalSpent;
+
+    pointsRemainingEl.textContent = remaining;
+    maxPointsEl.textContent = state.maxTotalPoints;
+    maxPointsInput.value = state.maxTotalPoints;
+
+    // Update styling when all points spent
+    if (remaining === 0) {
+        pointsCounter.classList.add('all-spent');
+    } else {
+        pointsCounter.classList.remove('all-spent');
+    }
+}
+
+// Update URL with current build state (without page reload)
+function updateURL() {
+    const buildStr = encodeSkillState();
+    const newURL = buildStr ?
+        window.location.pathname + '?build=' + buildStr :
+        window.location.pathname;
+
+    window.history.replaceState({}, '', newURL);
+}
+
+// Copy share URL to clipboard
+async function shareSkillTree() {
+    const buildStr = encodeSkillState();
+    const shareURL = window.location.origin + window.location.pathname +
+        (buildStr ? '?build=' + buildStr : '');
+
+    try {
+        await navigator.clipboard.writeText(shareURL);
+        shareBtn.textContent = 'COPIED!';
+        shareBtn.classList.add('copied');
+
+        setTimeout(() => {
+            shareBtn.textContent = 'SHARE';
+            shareBtn.classList.remove('copied');
+        }, 2000);
+    } catch (err) {
+        console.error('Failed to copy:', err);
+        // Fallback for mobile
+        const textArea = document.createElement('textarea');
+        textArea.value = shareURL;
+        textArea.style.position = 'fixed';
+        textArea.style.opacity = '0';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        try {
+            document.execCommand('copy');
+            shareBtn.textContent = 'COPIED!';
+            shareBtn.classList.add('copied');
+            setTimeout(() => {
+                shareBtn.textContent = 'SHARE';
+                shareBtn.classList.remove('copied');
+            }, 2000);
+        } catch (e) {
+            alert('Copy this URL: ' + shareURL);
+        }
+        document.body.removeChild(textArea);
+    }
+}
+
+// Toggle points popup
+function togglePointsPopup(e) {
+    e.stopPropagation();
+    pointsPopup.classList.toggle('visible');
+}
+
+// Change max points
+function setMaxPoints(value) {
+    const newMax = Math.max(1, parseInt(value, 10) || 76);
+    state.maxTotalPoints = newMax;
+    updatePointsDisplay();
+    updateURL();
+}
+
+// Setup UI event handlers
+function setupUIHandlers() {
+    // Reset button
+    resetBtn.addEventListener('click', resetSkillTree);
+
+    // Share button
+    shareBtn.addEventListener('click', shareSkillTree);
+
+    // Points counter click to show popup
+    pointsCounter.addEventListener('click', togglePointsPopup);
+
+    // Prevent popup clicks from closing it
+    pointsPopup.addEventListener('click', (e) => e.stopPropagation());
+
+    // Close popup when clicking elsewhere
+    document.addEventListener('click', () => {
+        pointsPopup.classList.remove('visible');
+    });
+
+    // Max points controls
+    decreaseMaxBtn.addEventListener('click', () => {
+        setMaxPoints(state.maxTotalPoints - 1);
+    });
+
+    increaseMaxBtn.addEventListener('click', () => {
+        setMaxPoints(state.maxTotalPoints + 1);
+    });
+
+    maxPointsInput.addEventListener('change', (e) => {
+        setMaxPoints(e.target.value);
+    });
+
+    maxPointsInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            setMaxPoints(e.target.value);
+            pointsPopup.classList.remove('visible');
+        }
+    });
+}
+
+// Load build from URL on page load
+function loadBuildFromURL() {
+    const params = new URLSearchParams(window.location.search);
+    const build = params.get('build');
+    if (build) {
+        decodeSkillState(build);
+    }
+}
+
 // === INITIALIZE ===
 window.addEventListener('resize', resize);
 
 function init() {
     initializeState();
+    loadBuildFromURL(); // Restore state from URL before preloading icons
     preloadIcons();
     resize();
+
+    // Setup UI handlers
+    setupUIHandlers();
+    updatePointsDisplay();
 
     // Wait for icons to load
     setTimeout(draw, 200);
