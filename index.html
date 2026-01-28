@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ARC Raiders Skill Tree Builder</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;600;700;800;900&family=Urbanist:wght@300&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="skill-tree-wrapper">
+        <canvas id="skillTreeCanvas"></canvas>
+
+        <!-- Branch Labels are now drawn on Canvas for proper pan/zoom -->
+
+        <!-- Tooltip -->
+        <div class="tooltip" id="tooltip">
+            <div class="tooltip-name" id="tooltipName">Skill Name</div>
+            <div class="tooltip-desc" id="tooltipDesc">Description</div>
+        </div>
+
+        <!-- Floating particles container -->
+        <div class="particles" id="particles"></div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+
+</html>
