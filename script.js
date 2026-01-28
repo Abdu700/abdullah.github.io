@@ -1,5 +1,4 @@
 // === ARC Raiders Skill Tree - Canvas Implementation ===
-// Matches arcskilltree.com 100%
 
 const canvas = document.getElementById('skillTreeCanvas');
 const ctx = canvas.getContext('2d');
@@ -19,7 +18,7 @@ const COLORS = {
     lineDark: '#606576'
 };
 
-// === COMPLETE SKILL DATA (from arcskilltree.com) ===
+// === COMPLETE SKILL DATA  ===
 const SKILL_DATA = {
     Conditioning: {
         skills: [
@@ -100,18 +99,18 @@ const SKILL_DATA = {
     Survival: {
         skills: [
             { id: 'agile-croucher', name: 'Agile Croucher', description: 'Your movement speed while crouching is increased.', maxPoints: 5, requiredSkill: null, requiredPoints: null, x: 774, y: 570, level: 0 },
-            { id: 'looters-instincts', name: "Looter's Instincts", description: 'When searching a container, loot is revealed faster.', maxPoints: 5, requiredSkill: 'agile-croucher', requiredPoints: null, x: 913, y: 475, level: 1 },
-            { id: 'revitalizing-squat', name: 'Revitalizing Squat', description: 'Stamina regeneration while crouched is increased.', maxPoints: 5, requiredSkill: 'agile-croucher', requiredPoints: null, x: 927, y: 557, level: 1 },
-            { id: 'silent-scavenger', name: 'Silent Scavenger', description: 'You make less noise when looting.', maxPoints: 5, requiredSkill: 'looters-instincts', requiredPoints: null, x: 913, y: 415, level: 2 },
-            { id: 'in-round-crafting', name: 'In-round Crafting', description: 'Unlocks field-craft items while topside.', maxPoints: 1, requiredSkill: 'revitalizing-squat', requiredPoints: null, x: 981, y: 528, level: 2 },
+            { id: 'looters-instincts', name: "Looter's Instincts", description: 'When searching a container, loot is revealed faster.', maxPoints: 5, requiredSkill: 'agile-croucher', requiredPoints: null, x: 908, y: 475, level: 1 },
+            { id: 'revitalizing-squat', name: 'Revitalizing Squat', description: 'Stamina regeneration while crouched is increased.', maxPoints: 5, requiredSkill: 'agile-croucher', requiredPoints: null, x: 927, y: 555, level: 1 },
+            { id: 'silent-scavenger', name: 'Silent Scavenger', description: 'You make less noise when looting.', maxPoints: 5, requiredSkill: 'looters-instincts', requiredPoints: null, x: 908, y: 415, level: 2 },
+            { id: 'in-round-crafting', name: 'In-round Crafting', description: 'Unlocks field-craft items while topside.', maxPoints: 1, requiredSkill: 'revitalizing-squat', requiredPoints: null, x: 981, y: 526, level: 2 },
             { id: 'suffer-in-silence', name: 'Suffer In Silence', description: 'While critically hurt, your movement makes less noise.', maxPoints: 1, requiredSkill: 'silent-scavenger', requiredPoints: 15, x: 964, y: 341, level: 3 },
             { id: 'good-as-new', name: 'Good As New', description: 'While healing, stamina regeneration is increased.', maxPoints: 1, requiredSkill: 'in-round-crafting', requiredPoints: 15, x: 1043, y: 475, level: 3 },
-            { id: 'broad-shoulders', name: 'Broad Shoulders', description: 'Increases the maximum weight you can carry.', maxPoints: 5, requiredSkill: 'suffer-in-silence', requiredPoints: null, x: 1090, y: 283, level: 4 },
-            { id: 'traveling-tinkerer', name: 'Traveling Tinkerer', description: 'Unlocks additional items to field craft.', maxPoints: 1, requiredSkill: ['suffer-in-silence', 'good-as-new'], requiredPoints: null, x: 1132, y: 348, level: 4 },
-            { id: 'stubborn-mule', name: 'Stubborn Mule', description: 'Stamina regeneration is less affected by over-encumbrance.', maxPoints: 5, requiredSkill: 'good-as-new', requiredPoints: null, x: 1169, y: 418, level: 4 },
-            { id: 'looters-luck', name: "Looter's Luck", description: 'Chance to reveal twice as many items at once.', maxPoints: 5, requiredSkill: 'broad-shoulders', requiredPoints: null, x: 1140, y: 254, level: 5 },
+            { id: 'broad-shoulders', name: 'Broad Shoulders', description: 'Increases the maximum weight you can carry.', maxPoints: 5, requiredSkill: 'suffer-in-silence', requiredPoints: null, x: 1088.5, y: 280, level: 4 },
+            { id: 'traveling-tinkerer', name: 'Traveling Tinkerer', description: 'Unlocks additional items to field craft.', maxPoints: 1, requiredSkill: ['suffer-in-silence', 'good-as-new'], requiredPoints: null, x: 1131, y: 346, level: 4 },
+            { id: 'stubborn-mule', name: 'Stubborn Mule', description: 'Stamina regeneration is less affected by over-encumbrance.', maxPoints: 5, requiredSkill: 'good-as-new', requiredPoints: null, x: 1168, y: 416, level: 4 },
+            { id: 'looters-luck', name: "Looter's Luck", description: 'Chance to reveal twice as many items at once.', maxPoints: 5, requiredSkill: 'broad-shoulders', requiredPoints: null, x: 1138.5, y: 251, level: 5 },
             { id: 'one-raiders-scraps', name: "One Raider's Scraps", description: 'Chance of finding additional field-crafted items in Raider containers.', maxPoints: 5, requiredSkill: 'traveling-tinkerer', requiredPoints: null, x: 1180, y: 321, level: 5 },
-            { id: 'three-deep-breaths', name: 'Three Deep Breaths', description: 'After an ability drains stamina, you recover more quickly.', maxPoints: 5, requiredSkill: 'stubborn-mule', requiredPoints: null, x: 1219.33, y: 388.33, level: 5 },
+            { id: 'three-deep-breaths', name: 'Three Deep Breaths', description: 'After an ability drains stamina, you recover more quickly.', maxPoints: 5, requiredSkill: 'stubborn-mule', requiredPoints: null, x: 1218.33, y: 386.33, level: 5 },
             { id: 'security-breach', name: 'Security Breach', description: 'Lets you breach Security Lockers.', maxPoints: 1, requiredSkill: ['looters-luck', 'one-raiders-scraps'], requiredPoints: 36, x: 1245, y: 178, level: 6 },
             { id: 'minesweeper', name: 'Minesweeper', description: 'Mines and explosive deployables can be defused.', maxPoints: 1, requiredSkill: ['one-raiders-scraps', 'three-deep-breaths'], requiredPoints: 36, x: 1322, y: 314, level: 6 }
         ],
@@ -433,14 +432,14 @@ function drawRootLines() {
     ctx.beginPath();
     ctx.moveTo(Math.round(590), Math.round(575)); // Start from root node
     ctx.arcTo(Math.round(660), Math.round(575), Math.round(660), Math.round(620), 40); // Small arc (radius 40)
-    ctx.lineTo(Math.round(660), Math.round(900)); // Straight down
+    ctx.lineTo(Math.round(660), Math.round(2000)); // Straight down
     ctx.stroke();
 
     // Mobility root line (yellow) - straight down from node
     ctx.strokeStyle = COLORS.mobility;
     ctx.beginPath();
     ctx.moveTo(Math.round(676), Math.round(529)); // Start from root node
-    ctx.lineTo(Math.round(676), Math.round(900)); // Straight down (center line)
+    ctx.lineTo(Math.round(676), Math.round(2000)); // Straight down (center line)
     ctx.stroke();
 
     // Survival root line (red) - small arc then straight down
@@ -448,7 +447,7 @@ function drawRootLines() {
     ctx.beginPath();
     ctx.moveTo(Math.round(790), Math.round(600)); // Start from root node
     ctx.arcTo(Math.round(695), Math.round(600), Math.round(695), Math.round(660), 40); // Small arc (radius 40)
-    ctx.lineTo(Math.round(695), Math.round(900)); // Straight down
+    ctx.lineTo(Math.round(695), Math.round(2000)); // Straight down
     ctx.stroke();
 
     ctx.restore();
