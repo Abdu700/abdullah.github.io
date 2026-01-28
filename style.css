@@ -36,10 +36,184 @@ body {
     width: 100%;
     height: 100%;
     cursor: grab;
+    touch-action: none;
+    /* Prevent browser touch handling for mobile */
 }
 
 #skillTreeCanvas:active {
     cursor: grabbing;
+}
+
+/* === Header Controls === */
+.header-controls {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    z-index: 100;
+}
+
+.header-btn {
+    font-family: 'Barlow', sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    padding: 10px 20px;
+    background: transparent;
+    border: 1px solid rgba(96, 101, 118, 0.4);
+    color: #D1CBBF;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.header-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(96, 101, 118, 0.8);
+}
+
+.header-btn:active {
+    background: rgba(255, 255, 255, 0.05);
+    transform: scale(0.98);
+}
+
+.header-btn.copied {
+    background: rgba(18, 255, 112, 0.2);
+    border-color: var(--color-conditioning);
+    color: var(--color-conditioning);
+}
+
+.points-counter {
+    position: relative;
+    font-family: 'Barlow', sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 10px 16px;
+    background: transparent;
+    border: 1px solid rgba(96, 101, 118, 0.4);
+    color: #D1CBBF;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    user-select: none;
+}
+
+.points-counter:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.points-counter.all-spent #pointsRemaining {
+    color: var(--color-survival);
+}
+
+.points-popup {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 8px;
+    padding: 16px;
+    background: #E3D9CA;
+    color: #150A0B;
+    border-radius: 8px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+    display: none;
+    min-width: 200px;
+    z-index: 101;
+}
+
+.points-popup.visible {
+    display: block;
+}
+
+.popup-title {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 12px;
+    text-align: center;
+}
+
+.popup-controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    background: rgba(0, 0, 0, 0.1);
+    padding: 8px;
+    border-radius: 4px;
+}
+
+.popup-btn {
+    width: 32px;
+    height: 32px;
+    font-size: 18px;
+    font-weight: 700;
+    background: #150A0B;
+    color: #E3D9CA;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+}
+
+.popup-btn:hover {
+    background: #2a2025;
+}
+
+.popup-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+#maxPointsInput {
+    width: 50px;
+    text-align: center;
+    font-family: 'Barlow', sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 6px;
+    border: 1px solid rgba(0, 0, 0, 0.2);
+    border-radius: 4px;
+    background: white;
+}
+
+#maxPointsInput::-webkit-outer-spin-button,
+#maxPointsInput::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.popup-hint {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(0, 0, 0, 0.1);
+    font-size: 11px;
+    color: #606576;
+    text-align: center;
+    line-height: 1.5;
+}
+
+/* Mobile adjustments for header */
+@media (max-width: 600px) {
+    .header-controls {
+        top: 8px;
+        right: 8px;
+        gap: 8px;
+    }
+
+    .header-btn {
+        padding: 8px 12px;
+        font-size: 11px;
+    }
+
+    .points-counter {
+        padding: 8px 12px;
+        font-size: 12px;
+    }
 }
 
 /* === Branch Labels === */
@@ -119,6 +293,7 @@ body {
     font-weight: 400;
     line-height: 1.5;
     color: #817D83;
+    white-space: pre-wrap;
 }
 
 
