@@ -1,4 +1,17 @@
 // === ARC Raiders Skill Tree - Canvas Implementation ===
+// PROTECTION: Domain Lock
+
+
+document.addEventListener('contextmenu', function (e) {
+    e.preventDefault();
+});
+
+// منع F12 و Ctrl+Shift+I (Developer Tools)
+document.addEventListener('keydown', function (e) {
+    if (e.key === 'F12' || (e.ctrlKey && e.shiftKey && e.key === 'I')) {
+        e.preventDefault();
+    }
+});
 
 const canvas = document.getElementById('skillTreeCanvas');
 const ctx = canvas.getContext('2d');
