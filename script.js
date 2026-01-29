@@ -717,23 +717,11 @@ function drawNode(skill, category) {
         // Maxed: black icon background
 
         if (isMaxed) {
-            // Mobile shadow throttling: skip expensive filter during motion
-            if (isMobile && isMoving) {
-                // Simplified rendering during motion - draw black icon using compositing (cheaper than filter)
-                ctx.globalCompositeOperation = 'source-over';
-                ctx.fillStyle = '#000000';
-                ctx.fill();
-                // Use icon as mask to show the shape
-                ctx.globalCompositeOperation = 'destination-in';
-                ctx.drawImage(img, x - iconSize / 2, y - iconSize / 2, iconSize, iconSize);
-                ctx.restore();
-            } else {
-                // Full quality: Use filter for crisp black icon
-                ctx.filter = 'brightness(0)';
-                ctx.drawImage(img, x - iconSize / 2, y - iconSize / 2, iconSize, iconSize);
-                ctx.filter = 'none';
-                ctx.restore();
-            }
+            // Use filter for crisp black icon (no shadow throttling for maxed - filter is not the main bottleneck)
+            ctx.filter = 'brightness(0)';
+            ctx.drawImage(img, x - iconSize / 2, y - iconSize / 2, iconSize, iconSize);
+            ctx.filter = 'none';
+            ctx.restore();
         } else if (isActive) {
             // Active: branch color icon background
             ctx.globalCompositeOperation = 'source-over';
