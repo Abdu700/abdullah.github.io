@@ -1586,6 +1586,15 @@ canvas.addEventListener('touchend', (e) => {
         const speed = Math.sqrt(velocityX * velocityX + velocityY * velocityY);
 
         if (speed > VELOCITY_THRESHOLD) {
+            // Keep isMoving true during inertia to continue using cache
+            isMoving = true;
+
+            // Cancel any pending high-quality redraw that would cause lag during the slide
+            if (motionEndTimeout) {
+                clearTimeout(motionEndTimeout);
+                motionEndTimeout = null;
+            }
+
             function inertiaLoop() {
                 velocityX *= FRICTION;
                 velocityY *= FRICTION;
@@ -1596,14 +1605,16 @@ canvas.addEventListener('touchend', (e) => {
 
                 // Continue or stop
                 if (currentSpeed > 0.1) {
+                    // Ensure isMoving is still true (defensive)
+                    isMoving = true;
                     draw();
                     inertiaAnimationId = requestAnimationFrame(inertiaLoop);
                 } else {
-                    // Motion stopped - render full quality
+                    // Motion COMPLETELY stopped - render full quality now
                     isMoving = false;
                     velocityX = velocityY = 0;
                     inertiaAnimationId = null;
-                    draw(); // Final high-quality render
+                    draw(); // Final single high-quality render
                 }
             }
             inertiaAnimationId = requestAnimationFrame(inertiaLoop);
