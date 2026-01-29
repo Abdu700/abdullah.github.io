@@ -207,10 +207,10 @@ let isMoving = false;                   // Motion state for shadow throttling
 let velocityX = 0, velocityY = 0;       // For inertia panning
 let lastTouchX = 0, lastTouchY = 0;     // Last touch position
 let lastTouchMoveTime = 0;              // For velocity calculation
-const FRICTION = 0.93;                  // Momentum decay per frame (higher = slides longer)
-const VELOCITY_THRESHOLD = 0.5;         // Min velocity to start inertia
+const FRICTION = 0.95;                  // Momentum decay per frame (higher = slides longer, smoother stop)
+const VELOCITY_THRESHOLD = 0.3;         // Min velocity to start inertia (lower = more responsive)
 let targetScale = 1;                    // For smooth zoom lerp
-const ZOOM_LERP_FACTOR = 0.15;          // Zoom smoothing factor
+const ZOOM_LERP_FACTOR = 0.18;          // Zoom smoothing factor (higher = faster zoom)
 let inertiaAnimationId = null;          // RAF ID for cleanup
 let motionEndTimeout = null;            // Timeout for motion end detection
 
@@ -524,6 +524,14 @@ function drawImmediate() {
     // Draw root lines (the main trunk)
     drawRootLines();
 
+    // === MOBILE MOTION OPTIMIZATION: Skip non-essential details during motion ===
+    const skipDetails = isMobile && isMoving;
+
+    // Disable image smoothing during motion for faster rendering
+    if (skipDetails) {
+        ctx.imageSmoothingEnabled = false;
+    }
+
     // Draw edges for each category - Pass 1: Inactive edges
     for (const [category, data] of Object.entries(SKILL_DATA)) {
         for (const edge of data.edges) {
@@ -545,15 +553,24 @@ function drawImmediate() {
         }
     }
 
-    // Draw badges (after all nodes/edges to be on top)
-    for (const [category, data] of Object.entries(SKILL_DATA)) {
-        for (const skill of data.skills) {
-            drawNodeBadge(skill, category);
+    // Draw badges - SKIP during motion on mobile (reduces ~45 draw calls)
+    if (!skipDetails) {
+        for (const [category, data] of Object.entries(SKILL_DATA)) {
+            for (const skill of data.skills) {
+                drawNodeBadge(skill, category);
+            }
         }
     }
 
-    // Draw branch labels (on Canvas so they pan/zoom with tree)
-    drawBranchLabels();
+    // Draw branch labels - SKIP during motion on mobile (reduces text rendering)
+    if (!skipDetails) {
+        drawBranchLabels();
+    }
+
+    // Restore image smoothing
+    if (skipDetails) {
+        ctx.imageSmoothingEnabled = true;
+    }
 
     ctx.restore();
 
