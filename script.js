@@ -25,6 +25,12 @@ const tooltip = document.getElementById('tooltip');
 const tooltipName = document.getElementById('tooltipName');
 const tooltipDesc = document.getElementById('tooltipDesc');
 
+// === OFF-SCREEN CACHE CANVAS (Mobile Performance) ===
+let cacheCanvas = null;
+let cacheCtx = null;
+let cacheNeedsUpdate = true; // Flag to trigger cache rebuild
+let cacheScale = 1; // Scale at which cache was rendered
+
 // === COLORS ===
 const COLORS = {
     conditioning: '#12FF70',
@@ -359,6 +365,10 @@ function resize() {
     canvas.style.height = window.innerHeight + 'px';
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.scale(dpr, dpr);
+
+    // Invalidate cache on resize
+    if (isMobile) invalidateCache();
+
     drawImmediate(); // Bypass throttle for resize
 }
 
@@ -494,6 +504,20 @@ function drawImmediate() {
         ctx.fillRect(0, 0, w, h);
     }
 
+    // === MOBILE: Use cached canvas during motion ===
+    if (isMobile && isMoving && cacheCanvas && !cacheNeedsUpdate) {
+        // Fast path: just copy the cached tree image
+        drawFromCache();
+        return;
+    }
+
+    // === Full render path ===
+    // On mobile, update cache if needed
+    if (isMobile && cacheNeedsUpdate) {
+        updateTreeCache();
+        cacheNeedsUpdate = false;
+    }
+
     // Calculate transform - center the tree
     const tx = (w - TREE_WIDTH * scale) / 2 + offsetX;
     const ty = (h - TREE_HEIGHT * scale) / 2 + offsetY;
@@ -526,22 +550,128 @@ function drawImmediate() {
         }
     }
 
-    // MOBILE OPTIMIZATION: Skip badges and labels during motion
-    if (!isMobile || !isMoving) {
-        // Draw badges (after all nodes/edges to be on top)
-        for (const [category, data] of Object.entries(SKILL_DATA)) {
-            for (const skill of data.skills) {
-                drawNodeBadge(skill, category);
-            }
+    // Draw badges (after all nodes/edges to be on top)
+    for (const [category, data] of Object.entries(SKILL_DATA)) {
+        for (const skill of data.skills) {
+            drawNodeBadge(skill, category);
         }
-
-        // Draw branch labels (on Canvas so they pan/zoom with tree)
-        drawBranchLabels();
     }
+
+    // Draw branch labels (on Canvas so they pan/zoom with tree)
+    drawBranchLabels();
 
     ctx.restore();
 
     // Update branch counters (now drawn on canvas)
+}
+
+// === OFF-SCREEN CANVAS CACHING FUNCTIONS ===
+
+// Initialize or resize the cache canvas
+function initCacheCanvas() {
+    if (!cacheCanvas) {
+        cacheCanvas = document.createElement('canvas');
+        cacheCtx = cacheCanvas.getContext('2d');
+    }
+
+    // Size cache to fit the tree at current scale with some padding
+    const padding = 100;
+    cacheCanvas.width = (TREE_WIDTH + padding * 2) * Math.max(scale, 1);
+    cacheCanvas.height = (TREE_HEIGHT + padding * 2) * Math.max(scale, 1);
+    cacheScale = scale;
+    cacheNeedsUpdate = true;
+}
+
+// Render the entire tree to the cache canvas
+function updateTreeCache() {
+    if (!cacheCanvas) initCacheCanvas();
+
+    // Clear cache
+    cacheCtx.clearRect(0, 0, cacheCanvas.width, cacheCanvas.height);
+
+    // Apply scale
+    cacheCtx.save();
+    const padding = 100;
+    cacheCtx.translate(padding * Math.max(scale, 1), padding * Math.max(scale, 1));
+    cacheCtx.scale(scale, scale);
+
+    // Draw root lines
+    const originalCtx = ctx;
+    // Temporarily redirect drawing to cache
+    ctx = cacheCtx;
+
+    drawRootLines();
+
+    // Draw edges - Pass 1: Inactive
+    for (const [category, data] of Object.entries(SKILL_DATA)) {
+        for (const edge of data.edges) {
+            drawEdge(edge, category, false);
+        }
+    }
+
+    // Draw edges - Pass 2: Active
+    for (const [category, data] of Object.entries(SKILL_DATA)) {
+        for (const edge of data.edges) {
+            drawEdge(edge, category, true);
+        }
+    }
+
+    // Draw nodes
+    for (const [category, data] of Object.entries(SKILL_DATA)) {
+        for (const skill of data.skills) {
+            drawNode(skill, category);
+        }
+    }
+
+    // Draw badges
+    for (const [category, data] of Object.entries(SKILL_DATA)) {
+        for (const skill of data.skills) {
+            drawNodeBadge(skill, category);
+        }
+    }
+
+    // Draw branch labels
+    drawBranchLabels();
+
+    // Restore original context
+    ctx = originalCtx;
+    cacheCtx.restore();
+
+    cacheScale = scale;
+}
+
+// Draw from cache (fast path during motion)
+function drawFromCache() {
+    if (!cacheCanvas) return;
+
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    const padding = 100;
+
+    // Calculate position to draw cache
+    const tx = (w - TREE_WIDTH * scale) / 2 + offsetX - padding * scale;
+    const ty = (h - TREE_HEIGHT * scale) / 2 + offsetY - padding * scale;
+
+    // If scale changed significantly, need to rebuild cache
+    if (Math.abs(scale - cacheScale) > 0.1) {
+        cacheNeedsUpdate = true;
+        // Fall back to direct render
+        drawImmediate();
+        return;
+    }
+
+    // Draw the cached tree image
+    ctx.drawImage(
+        cacheCanvas,
+        0, 0, cacheCanvas.width, cacheCanvas.height,
+        tx, ty,
+        cacheCanvas.width, cacheCanvas.height
+    );
+}
+
+// Invalidate cache (call when skills change)
+function invalidateCache() {
+    cacheNeedsUpdate = true;
 }
 
 function drawRootLines() {
@@ -975,6 +1105,7 @@ canvas.addEventListener('click', (e) => {
         const s = state.skills[node.id];
         s.currentLevel++;
         state.pointsSpent[s.category]++;
+        invalidateCache(); // Rebuild cache on next draw
         draw();
         showTooltip(node);
         updatePointsDisplay();
@@ -989,6 +1120,7 @@ canvas.addEventListener('contextmenu', (e) => {
         const s = state.skills[node.id];
         s.currentLevel--;
         state.pointsSpent[s.category]--;
+        invalidateCache(); // Rebuild cache on next draw
         draw();
         showTooltip(node);
         updatePointsDisplay();
@@ -1072,6 +1204,7 @@ canvas.addEventListener('touchstart', (e) => {
                 const s = state.skills[node.id];
                 s.currentLevel--;
                 state.pointsSpent[s.category]--;
+                invalidateCache(); // Rebuild cache on next draw
                 draw();
                 updatePointsDisplay();
                 updateURL();
@@ -1210,6 +1343,7 @@ canvas.addEventListener('touchend', (e) => {
                 const s = state.skills[node.id];
                 s.currentLevel++;
                 state.pointsSpent[s.category]++;
+                invalidateCache(); // Rebuild cache on next draw
                 draw();
                 updatePointsDisplay();
                 updateURL();
@@ -1387,6 +1521,7 @@ function resetSkillTree() {
         skill.currentLevel = 0;
     }
     state.pointsSpent = { Conditioning: 0, Mobility: 0, Survival: 0 };
+    invalidateCache(); // Rebuild cache on next draw
     draw();
     updatePointsDisplay();
     updateURL();
