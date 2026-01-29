@@ -189,9 +189,12 @@ const NODE_OFFSET_Y = 30;
 // === PERFORMANCE OPTIMIZATION (Mobile) ===
 const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 768;
 let lastDrawTime = 0;
-const MOBILE_FRAME_DELAY = 32; // ~30fps on mobile (vs 60fps desktop)
+const MOBILE_FRAME_DELAY = 16; // ~60fps target, but throttled during motion
+const MOBILE_MOTION_FRAME_DELAY = 24; // ~40fps during active panning/zooming
 let pendingDraw = false;
 let iconsLoaded = false;
+let motionDPR = 1; // Lower DPR used during motion on mobile
+let staticDPR = 1; // Full DPR used when static
 
 // === MOBILE SMOOTHNESS STATE (Phase 3 Optimization) ===
 let isMoving = false;                   // Motion state for shadow throttling
@@ -203,6 +206,17 @@ const VELOCITY_THRESHOLD = 0.5;         // Min velocity to start inertia
 let targetScale = 1;                    // For smooth zoom lerp
 const ZOOM_LERP_FACTOR = 0.15;          // Zoom smoothing factor
 let inertiaAnimationId = null;          // RAF ID for cleanup
+let motionEndTimeout = null;            // Timeout for motion end detection
+
+// Helper: Schedule a high-quality redraw after motion stops
+function scheduleHighQualityRedraw() {
+    if (motionEndTimeout) clearTimeout(motionEndTimeout);
+    motionEndTimeout = setTimeout(() => {
+        isMoving = false;
+        // Redraw with full quality (badges, labels, higher DPR)
+        draw();
+    }, 100); // Redraw 100ms after last motion
+}
 
 function initializeState() {
     state.skills = {};
@@ -325,10 +339,19 @@ function drawSvgPath(ctx, pathStr, offsetX, offsetY) {
 
 // === CANVAS RESIZE ===
 function resize() {
-    // On mobile, use reduced DPR (max 1.5) for better performance
+    // On mobile, use reduced DPR (max 1.0 during motion, 1.5 when static) for better performance
     // On desktop, use full DPR for crisp rendering
     const fullDpr = window.devicePixelRatio || 1;
-    const dpr = isMobile ? Math.min(fullDpr, 1.5) : fullDpr;
+
+    if (isMobile) {
+        staticDPR = Math.min(fullDpr, 1.5);
+        motionDPR = Math.min(fullDpr, 1.0); // Even lower during motion
+    } else {
+        staticDPR = fullDpr;
+        motionDPR = fullDpr;
+    }
+
+    const dpr = isMobile && isMoving ? motionDPR : staticDPR;
 
     canvas.width = window.innerWidth * dpr;
     canvas.height = window.innerHeight * dpr;
@@ -434,9 +457,10 @@ function getCategoryColor(category) {
 // Throttled draw function for mobile performance
 function draw() {
     if (isMobile) {
-        // Throttle draw calls on mobile
+        // Use more aggressive throttling during motion
+        const frameDelay = isMoving ? MOBILE_MOTION_FRAME_DELAY : MOBILE_FRAME_DELAY;
         const now = performance.now();
-        if (now - lastDrawTime < MOBILE_FRAME_DELAY) {
+        if (now - lastDrawTime < frameDelay) {
             // Schedule a draw if not already pending
             if (!pendingDraw) {
                 pendingDraw = true;
@@ -452,7 +476,6 @@ function draw() {
     drawImmediate();
 }
 
-// Actual draw implementation
 // Actual draw implementation
 function drawImmediate() {
     const w = window.innerWidth;
@@ -503,15 +526,18 @@ function drawImmediate() {
         }
     }
 
-    // Draw badges (after all nodes/edges to be on top)
-    for (const [category, data] of Object.entries(SKILL_DATA)) {
-        for (const skill of data.skills) {
-            drawNodeBadge(skill, category);
+    // MOBILE OPTIMIZATION: Skip badges and labels during motion
+    if (!isMobile || !isMoving) {
+        // Draw badges (after all nodes/edges to be on top)
+        for (const [category, data] of Object.entries(SKILL_DATA)) {
+            for (const skill of data.skills) {
+                drawNodeBadge(skill, category);
+            }
         }
-    }
 
-    // Draw branch labels (on Canvas so they pan/zoom with tree)
-    drawBranchLabels();
+        // Draw branch labels (on Canvas so they pan/zoom with tree)
+        drawBranchLabels();
+    }
 
     ctx.restore();
 
@@ -1026,6 +1052,12 @@ function getTouchCenter(touch1, touch2) {
 canvas.addEventListener('touchstart', (e) => {
     e.preventDefault(); // Prevent scrolling
 
+    // Cancel any pending motion-end redraw
+    if (motionEndTimeout) {
+        clearTimeout(motionEndTimeout);
+        motionEndTimeout = null;
+    }
+
     if (e.touches.length === 1) {
         // Single touch - could be tap, long-press, or pan start
         const touch = e.touches[0];
@@ -1102,6 +1134,9 @@ canvas.addEventListener('touchmove', (e) => {
                 // Set motion state for shadow throttling
                 isMoving = true;
 
+                // Schedule high-quality redraw after motion stops
+                if (isMobile) scheduleHighQualityRedraw();
+
                 // Continue panning
                 offsetX = touch.clientX - dragStart.x;
                 offsetY = touch.clientY - dragStart.y;
@@ -1121,6 +1156,9 @@ canvas.addEventListener('touchmove', (e) => {
         if (newScale !== scale) {
             // Set motion state
             isMoving = true;
+
+            // Schedule high-quality redraw after zoom stops
+            if (isMobile) scheduleHighQualityRedraw();
 
             // Zoom towards pinch center
             const w = window.innerWidth;
@@ -1226,6 +1264,11 @@ canvas.addEventListener('touchend', (e) => {
 
 canvas.addEventListener('touchcancel', (e) => {
     clearTimeout(longPressTimeout);
+    // Cancel motion end timeout
+    if (motionEndTimeout) {
+        clearTimeout(motionEndTimeout);
+        motionEndTimeout = null;
+    }
     // Cancel any running inertia
     if (inertiaAnimationId) {
         cancelAnimationFrame(inertiaAnimationId);
