@@ -1,6 +1,12 @@
 // === ARC Raiders Skill Tree - Canvas Implementation ===
 // PROTECTION: Domain Lock
-
+/*(function () {
+    const authorizedDomain = 'your-domain.com'; // CHANGE THIS to your actual domain
+    if (window.location.hostname !== authorizedDomain && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+        document.body.innerHTML = '<div style="color: white; background: #060505; height: 100vh; display: flex; align-items: center; justify-content: center; font-family: sans-serif; text-align: center; padding: 20px;"><div><h1>Unauthorized Domain</h1><p>This application is not authorized to run on this domain.</p></div></div>';
+        throw new Error('Unauthorized domain');
+    }
+})();*/
 
 document.addEventListener('contextmenu', function (e) {
     e.preventDefault();
@@ -187,7 +193,17 @@ const MOBILE_FRAME_DELAY = 32; // ~30fps on mobile (vs 60fps desktop)
 let pendingDraw = false;
 let iconsLoaded = false;
 
-// === INITIALIZE STATE ===
+// === MOBILE SMOOTHNESS STATE (Phase 3 Optimization) ===
+let isMoving = false;                   // Motion state for shadow throttling
+let velocityX = 0, velocityY = 0;       // For inertia panning
+let lastTouchX = 0, lastTouchY = 0;     // Last touch position
+let lastTouchMoveTime = 0;              // For velocity calculation
+const FRICTION = 0.93;                  // Momentum decay per frame (higher = slides longer)
+const VELOCITY_THRESHOLD = 0.5;         // Min velocity to start inertia
+let targetScale = 1;                    // For smooth zoom lerp
+const ZOOM_LERP_FACTOR = 0.15;          // Zoom smoothing factor
+let inertiaAnimationId = null;          // RAF ID for cleanup
+
 function initializeState() {
     state.skills = {};
     state.pointsSpent = { Conditioning: 0, Mobility: 0, Survival: 0 };
@@ -701,11 +717,19 @@ function drawNode(skill, category) {
         // Maxed: black icon background
 
         if (isMaxed) {
-            // NEW SHARP METHOD: Use filter instead of temp canvas to maintain original pixel quality
-            ctx.filter = 'brightness(0)';
-            ctx.drawImage(img, x - iconSize / 2, y - iconSize / 2, iconSize, iconSize);
-            ctx.filter = 'none'; // Reset filter immediately
-            ctx.restore(); // Restore to exit clip
+            // Mobile shadow throttling: skip expensive filter during motion
+            if (isMobile && isMoving) {
+                // Simplified rendering during motion - just draw black silhouette
+                ctx.fillStyle = '#000000';
+                ctx.fill();
+                ctx.restore();
+            } else {
+                // Full quality: Use filter for crisp black icon
+                ctx.filter = 'brightness(0)';
+                ctx.drawImage(img, x - iconSize / 2, y - iconSize / 2, iconSize, iconSize);
+                ctx.filter = 'none';
+                ctx.restore();
+            }
         } else if (isActive) {
             // Active: branch color icon background
             ctx.globalCompositeOperation = 'source-over';
@@ -1046,6 +1070,7 @@ canvas.addEventListener('touchmove', (e) => {
 
     if (e.touches.length === 1 && touchStartPos) {
         const touch = e.touches[0];
+        const now = performance.now();
         const dx = touch.clientX - touchStartPos.x;
         const dy = touch.clientY - touchStartPos.y;
         const distance = Math.sqrt(dx * dx + dy * dy);
@@ -1054,11 +1079,36 @@ canvas.addEventListener('touchmove', (e) => {
         if (distance > TAP_THRESHOLD) {
             clearTimeout(longPressTimeout);
 
+            // Cancel any running inertia animation
+            if (inertiaAnimationId) {
+                cancelAnimationFrame(inertiaAnimationId);
+                inertiaAnimationId = null;
+            }
+
             if (!isTouchPanning) {
                 // Start panning from current position
                 isTouchPanning = true;
                 dragStart = { x: touch.clientX - offsetX, y: touch.clientY - offsetY };
+                // Initialize velocity tracking
+                lastTouchX = touch.clientX;
+                lastTouchY = touch.clientY;
+                lastTouchMoveTime = now;
             } else {
+                // Calculate velocity for inertia (mobile only)
+                if (isMobile && lastTouchMoveTime > 0) {
+                    const dt = now - lastTouchMoveTime;
+                    if (dt > 0 && dt < 100) { // Ignore stale data
+                        velocityX = (touch.clientX - lastTouchX) / dt * 16; // Normalize to ~60fps
+                        velocityY = (touch.clientY - lastTouchY) / dt * 16;
+                    }
+                }
+                lastTouchX = touch.clientX;
+                lastTouchY = touch.clientY;
+                lastTouchMoveTime = now;
+
+                // Set motion state for shadow throttling
+                isMoving = true;
+
                 // Continue panning
                 offsetX = touch.clientX - dragStart.x;
                 offsetY = touch.clientY - dragStart.y;
@@ -1076,6 +1126,9 @@ canvas.addEventListener('touchmove', (e) => {
         const newScale = Math.max(0.5, Math.min(2.5, scale * zoomFactor));
 
         if (newScale !== scale) {
+            // Set motion state
+            isMoving = true;
+
             // Zoom towards pinch center
             const w = window.innerWidth;
             const h = window.innerHeight;
@@ -1084,12 +1137,19 @@ canvas.addEventListener('touchmove', (e) => {
             const treeX = (currentCenter.x - oldTx) / scale;
             const treeY = (currentCenter.y - oldTy) / scale;
 
-            const newTx = currentCenter.x - treeX * newScale;
-            const newTy = currentCenter.y - treeY * newScale;
+            // Mobile: Use smooth lerp for zoom
+            if (isMobile) {
+                targetScale = newScale;
+                scale += (targetScale - scale) * ZOOM_LERP_FACTOR;
+            } else {
+                scale = newScale;
+            }
 
-            offsetX = newTx - (w - TREE_WIDTH * newScale) / 2;
-            offsetY = newTy - (h - TREE_HEIGHT * newScale) / 2;
-            scale = newScale;
+            const newTx = currentCenter.x - treeX * scale;
+            const newTy = currentCenter.y - treeY * scale;
+
+            offsetX = newTx - (w - TREE_WIDTH * scale) / 2;
+            offsetY = newTy - (h - TREE_HEIGHT * scale) / 2;
             draw();
         }
 
@@ -1124,6 +1184,43 @@ canvas.addEventListener('touchend', (e) => {
                 updateURL();
             }
         }
+        // No inertia for taps
+        isMoving = false;
+    } else if (isTouchPanning && isMobile) {
+        // Start inertia animation if velocity is significant
+        const speed = Math.sqrt(velocityX * velocityX + velocityY * velocityY);
+
+        if (speed > VELOCITY_THRESHOLD) {
+            function inertiaLoop() {
+                velocityX *= FRICTION;
+                velocityY *= FRICTION;
+                offsetX += velocityX;
+                offsetY += velocityY;
+
+                const currentSpeed = Math.sqrt(velocityX * velocityX + velocityY * velocityY);
+
+                // Continue or stop
+                if (currentSpeed > 0.1) {
+                    draw();
+                    inertiaAnimationId = requestAnimationFrame(inertiaLoop);
+                } else {
+                    // Motion stopped - render full quality
+                    isMoving = false;
+                    velocityX = velocityY = 0;
+                    inertiaAnimationId = null;
+                    draw(); // Final high-quality render
+                }
+            }
+            inertiaAnimationId = requestAnimationFrame(inertiaLoop);
+        } else {
+            // No significant velocity - stop immediately
+            isMoving = false;
+            velocityX = velocityY = 0;
+            draw();
+        }
+    } else {
+        // Desktop or no panning - just reset
+        isMoving = false;
     }
 
     // Reset touch state
@@ -1131,14 +1228,24 @@ canvas.addEventListener('touchend', (e) => {
     isTouchPanning = false;
     initialPinchDistance = 0;
     lastTouchCenter = null;
+    lastTouchMoveTime = 0;
 });
 
 canvas.addEventListener('touchcancel', (e) => {
     clearTimeout(longPressTimeout);
+    // Cancel any running inertia
+    if (inertiaAnimationId) {
+        cancelAnimationFrame(inertiaAnimationId);
+        inertiaAnimationId = null;
+    }
+    // Reset all touch and smoothness state
     touchStartPos = null;
     isTouchPanning = false;
     initialPinchDistance = 0;
     lastTouchCenter = null;
+    lastTouchMoveTime = 0;
+    isMoving = false;
+    velocityX = velocityY = 0;
 });
 
 // === UI CONTROLS (Reset, Share, Points Counter) ===
