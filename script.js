@@ -30,7 +30,13 @@ let cacheCanvas = null;
 let cacheCtx = null;
 let cacheNeedsUpdate = true; // Flag to trigger cache rebuild
 let cacheScale = 1; // Scale at which cache was rendered
-let cacheDirty = false; // Cache needs rebuild but keep using old one during motion
+
+// === SNAPSHOT CANVAS FOR SMOOTH PANNING (Mobile Only) ===
+let snapshotCanvas = null;
+let snapshotCtx = null;
+let useSnapshot = false; // Flag to use snapshot during panning
+let snapshotOffsetX = 0; // Offset when snapshot was taken
+let snapshotOffsetY = 0; // Offset when snapshot was taken
 
 // === PRE-RENDERED TEXT CACHE (Mobile Performance) ===
 // Text rendering is EXTREMELY expensive on mobile - pre-render once and reuse
@@ -228,16 +234,9 @@ function scheduleHighQualityRedraw() {
     if (motionEndTimeout) clearTimeout(motionEndTimeout);
     motionEndTimeout = setTimeout(() => {
         isMoving = false;
-        
-        // If cache is dirty, rebuild it now
-        if (cacheDirty) {
-            cacheNeedsUpdate = true;
-            cacheDirty = false;
-        }
-        
         // Redraw with full quality (badges, labels, higher DPR)
         draw();
-    }, 150); // Increased from 100ms for better motion detection
+    }, 100); // Redraw 100ms after last motion
 }
 
 function initializeState() {
@@ -367,7 +366,7 @@ function resize() {
 
     if (isMobile) {
         staticDPR = Math.min(fullDpr, 1.5);
-        motionDPR = 1.0; // Fixed 1.0 during motion for maximum performance
+        motionDPR = Math.min(fullDpr, 1.0); // Even lower during motion
     } else {
         staticDPR = fullDpr;
         motionDPR = fullDpr;
@@ -383,10 +382,7 @@ function resize() {
     ctx.scale(dpr, dpr);
 
     // Invalidate cache on resize
-    if (isMobile) {
-        cacheNeedsUpdate = true;
-        cacheDirty = false;
-    }
+    if (isMobile) invalidateCache();
 
     drawImmediate(); // Bypass throttle for resize
 }
@@ -516,6 +512,25 @@ function drawImmediate() {
     const w = window.innerWidth;
     const h = window.innerHeight;
 
+    // === MOBILE SNAPSHOT MODE: During panning, just draw the snapshot ===
+    if (isMobile && useSnapshot && snapshotCanvas) {
+        // Clear canvas
+        ctx.fillStyle = COLORS.background;
+        ctx.fillRect(0, 0, w, h);
+
+        // Calculate how much we've moved since snapshot was taken
+        const deltaX = offsetX - snapshotOffsetX;
+        const deltaY = offsetY - snapshotOffsetY;
+
+        // Draw the snapshot image shifted by the delta
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(snapshotCanvas, deltaX, deltaY);
+        ctx.imageSmoothingEnabled = true;
+        
+        return; // Skip all tree rendering
+    }
+
+    // === NORMAL RENDERING PATH ===
     // Clear and fill background
     ctx.fillStyle = COLORS.background;
     ctx.fillRect(0, 0, w, h);
@@ -529,27 +544,15 @@ function drawImmediate() {
         ctx.fillRect(0, 0, w, h);
     }
 
-    // === MOBILE FAST PATH: Use cache during motion ===
-    // During panning/zooming, ONLY draw the cache - no individual elements
-    // This is the key to smooth 60fps performance
-    if (isMobile && isMoving && cacheCanvas && iconsLoaded) {
-        // Check if scale changed significantly - need to rebuild cache
-        if (Math.abs(scale - cacheScale) > 0.15) {
-            cacheDirty = true;
-        }
-        
-        // Use cache even if dirty during motion - rebuild after motion stops
+    // === MOBILE CACHING: Use cache whenever possible ===
+    // Cache is used during pan/zoom for smooth 60fps
+    // Only rebuild cache when skills actually change (not on every pan/zoom)
+    if (isMobile && cacheCanvas && !cacheNeedsUpdate && iconsLoaded) {
+        // Fast path: just copy the cached tree image
         drawFromCache();
         return;
     }
 
-    // === MOBILE STATIC: Use cache when not moving (if available and valid) ===
-    if (isMobile && !isMoving && cacheCanvas && !cacheNeedsUpdate && iconsLoaded && Math.abs(scale - cacheScale) < 0.01) {
-        drawFromCache();
-        return;
-    }
-
-    // === FULL RENDER PATH (Desktop or cache unavailable) ===
     // Calculate transform - center the tree
     const tx = (w - TREE_WIDTH * scale) / 2 + offsetX;
     const ty = (h - TREE_HEIGHT * scale) / 2 + offsetY;
@@ -561,7 +564,10 @@ function drawImmediate() {
     // Draw root lines (the main trunk)
     drawRootLines();
 
-    // Disable image smoothing on mobile for faster rendering
+    // === MOBILE MOTION OPTIMIZATION: Skip non-essential details during motion ===
+    const skipDetails = isMobile && isMoving;
+
+    // Disable image smoothing on mobile for faster rendering (always, not just during motion)
     if (isMobile) {
         ctx.imageSmoothingEnabled = false;
     }
@@ -593,28 +599,31 @@ function drawImmediate() {
         }
     }
 
-    // Draw badges (skip during motion on mobile)
-    if (!isMobile || !isMoving) {
-        for (const [category, data] of Object.entries(SKILL_DATA)) {
-            for (const skill of data.skills) {
-                drawNodeBadge(skill, category);
-            }
+    // Draw badges
+    for (const [category, data] of Object.entries(SKILL_DATA)) {
+        for (const skill of data.skills) {
+            drawNodeBadge(skill, category);
         }
     }
 
     // Draw branch labels
     drawBranchLabels();
 
+    // Restore image smoothing (only if we're on desktop)
+    if (!isMobile && skipDetails) {
+        ctx.imageSmoothingEnabled = true;
+    }
+
     ctx.restore();
 
-    // === MOBILE: Build/rebuild cache when idle ===
-    if (isMobile && !isMoving && iconsLoaded && (cacheNeedsUpdate || cacheDirty)) {
+    // === MOBILE: Build cache AFTER rendering to screen ===
+    // This ensures the user always sees content first, then we cache for smooth motion
+    if (isMobile && cacheNeedsUpdate && !isMoving && iconsLoaded) {
         // Use requestIdleCallback if available, otherwise RAF
         const buildCache = () => {
-            if (cacheNeedsUpdate || cacheDirty) {
+            if (cacheNeedsUpdate) {
                 updateTreeCache();
                 cacheNeedsUpdate = false;
-                cacheDirty = false;
             }
         };
         
@@ -632,31 +641,29 @@ function drawImmediate() {
 function initCacheCanvas() {
     if (!cacheCanvas) {
         cacheCanvas = document.createElement('canvas');
-        cacheCtx = cacheCanvas.getContext('2d', { alpha: false }); // Opaque for better performance
+        cacheCtx = cacheCanvas.getContext('2d');
     }
 
-    // Cache should contain the tree at current scale, position-independent
-    // We'll draw it at (0,0) and translate when rendering
-    cacheCanvas.width = TREE_WIDTH * scale;
-    cacheCanvas.height = TREE_HEIGHT * scale;
+    // Size cache to fit the tree at current scale with some padding
+    const padding = 100;
+    cacheCanvas.width = (TREE_WIDTH + padding * 2) * Math.max(scale, 1);
+    cacheCanvas.height = (TREE_HEIGHT + padding * 2) * Math.max(scale, 1);
     cacheScale = scale;
     cacheNeedsUpdate = true;
 }
 
-// Render the entire tree to the cache canvas (position-independent)
+// Render the entire tree to the cache canvas
 function updateTreeCache() {
-    if (!cacheCanvas || Math.abs(scale - cacheScale) > 0.01) {
-        initCacheCanvas();
-    }
+    if (!cacheCanvas) initCacheCanvas();
 
-    // Clear cache with background color
-    cacheCtx.fillStyle = COLORS.background;
-    cacheCtx.fillRect(0, 0, cacheCanvas.width, cacheCanvas.height);
+    // Clear cache
+    cacheCtx.clearRect(0, 0, cacheCanvas.width, cacheCanvas.height);
 
-    // Apply scale - cache is rendered at (0,0) in tree coordinates
+    // Apply scale
     cacheCtx.save();
+    const padding = 100;
+    cacheCtx.translate(padding * Math.max(scale, 1), padding * Math.max(scale, 1));
     cacheCtx.scale(scale, scale);
-    cacheCtx.imageSmoothingEnabled = false;
 
     // Draw root lines
     const originalCtx = ctx;
@@ -664,24 +671,22 @@ function updateTreeCache() {
     ctx = cacheCtx;
 
     // CRITICAL: Use try-finally to ensure ctx is ALWAYS restored
+    // If any drawing function throws an error, ctx would stay pointing to cacheCtx
+    // causing all subsequent rendering to go to the invisible cache canvas
     try {
         drawRootLines();
 
-        // Draw edges - batched for mobile, individual for desktop
-        if (isMobile) {
-            drawEdgesBatched();
-        } else {
-            // Pass 1: Inactive
-            for (const [category, data] of Object.entries(SKILL_DATA)) {
-                for (const edge of data.edges) {
-                    drawEdge(edge, category, false);
-                }
+        // Draw edges - Pass 1: Inactive
+        for (const [category, data] of Object.entries(SKILL_DATA)) {
+            for (const edge of data.edges) {
+                drawEdge(edge, category, false);
             }
-            // Pass 2: Active
-            for (const [category, data] of Object.entries(SKILL_DATA)) {
-                for (const edge of data.edges) {
-                    drawEdge(edge, category, true);
-                }
+        }
+
+        // Draw edges - Pass 2: Active
+        for (const [category, data] of Object.entries(SKILL_DATA)) {
+            for (const edge of data.edges) {
+                drawEdge(edge, category, true);
             }
         }
 
@@ -711,33 +716,74 @@ function updateTreeCache() {
 }
 
 // Draw from cache (fast path during motion)
-// Cache is position-independent - we translate the context to position it
 function drawFromCache() {
     if (!cacheCanvas) return;
 
     const w = window.innerWidth;
     const h = window.innerHeight;
+    const padding = 100;
 
-    // Calculate where to draw the cache (centered + offset)
-    const tx = (w - TREE_WIDTH * scale) / 2 + offsetX;
-    const ty = (h - TREE_HEIGHT * scale) / 2 + offsetY;
+    // Calculate position to draw cache
+    const tx = (w - TREE_WIDTH * scale) / 2 + offsetX - padding * scale;
+    const ty = (h - TREE_HEIGHT * scale) / 2 + offsetY - padding * scale;
 
-    // Simple and fast: just draw the cached image at the calculated position
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(cacheCanvas, tx, ty);
-    ctx.imageSmoothingEnabled = true;
+    // If scale changed significantly, need to rebuild cache
+    if (Math.abs(scale - cacheScale) > 0.1) {
+        cacheNeedsUpdate = true;
+        // Fall back to direct render
+        drawImmediate();
+        return;
+    }
+
+    // Draw the cached tree image
+    ctx.drawImage(
+        cacheCanvas,
+        0, 0, cacheCanvas.width, cacheCanvas.height,
+        tx, ty,
+        cacheCanvas.width, cacheCanvas.height
+    );
 }
 
 // Invalidate cache (call when skills change)
 function invalidateCache() {
-    // Mark cache as dirty but don't force immediate rebuild
-    // Keep using old cache during motion, rebuild when idle
-    if (isMoving) {
-        cacheDirty = true;
-    } else {
-        cacheNeedsUpdate = true;
+    cacheNeedsUpdate = true;
+    textCacheNeedsUpdate = true; // Also invalidate text cache when skills change
+}
+
+// === SNAPSHOT FUNCTIONS FOR SMOOTH PANNING (Mobile Only) ===
+
+// Capture current canvas state as snapshot before panning starts
+function captureSnapshot() {
+    if (!isMobile) return;
+    
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    
+    // Create snapshot canvas if needed
+    if (!snapshotCanvas) {
+        snapshotCanvas = document.createElement('canvas');
+        snapshotCtx = snapshotCanvas.getContext('2d', { alpha: false });
     }
-    textCacheNeedsUpdate = true;
+    
+    // Size to match viewport
+    snapshotCanvas.width = w;
+    snapshotCanvas.height = h;
+    
+    // Copy current canvas content to snapshot
+    snapshotCtx.drawImage(canvas, 0, 0);
+    
+    // Store current offsets
+    snapshotOffsetX = offsetX;
+    snapshotOffsetY = offsetY;
+    
+    // Enable snapshot mode
+    useSnapshot = true;
+}
+
+// Discard snapshot and return to normal rendering
+function discardSnapshot() {
+    useSnapshot = false;
+    // Don't delete the canvas, just reuse it next time
 }
 
 function drawRootLines() {
@@ -1352,9 +1398,6 @@ canvas.addEventListener('mousemove', (e) => {
     }
 
     if (isDragging) {
-        isMoving = true; // Set motion state for desktop too
-        scheduleHighQualityRedraw();
-        
         offsetX = e.clientX - dragStart.x;
         offsetY = e.clientY - dragStart.y;
         draw();
@@ -1374,9 +1417,7 @@ canvas.addEventListener('mousedown', (e) => {
 
 canvas.addEventListener('mouseup', (e) => {
     isDragging = false;
-    isMoving = false; // Stop motion state
     canvas.style.cursor = 'grab';
-    draw(); // Final high-quality draw
 });
 
 canvas.addEventListener('click', (e) => {
@@ -1410,9 +1451,6 @@ canvas.addEventListener('contextmenu', (e) => {
 
 canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
-
-    isMoving = true; // Set motion state during zoom
-    scheduleHighQualityRedraw();
 
     // Get mouse position relative to canvas
     const mouseX = e.clientX;
@@ -1537,6 +1575,10 @@ canvas.addEventListener('touchmove', (e) => {
                 // Start panning from current position
                 isTouchPanning = true;
                 dragStart = { x: touch.clientX - offsetX, y: touch.clientY - offsetY };
+                
+                // === CAPTURE SNAPSHOT BEFORE PANNING STARTS ===
+                captureSnapshot();
+                
                 // Initialize velocity tracking
                 lastTouchX = touch.clientX;
                 lastTouchY = touch.clientY;
@@ -1646,7 +1688,7 @@ canvas.addEventListener('touchend', (e) => {
         const speed = Math.sqrt(velocityX * velocityX + velocityY * velocityY);
 
         if (speed > VELOCITY_THRESHOLD) {
-            // Keep isMoving true during inertia to continue using cache
+            // Keep isMoving true during inertia to continue using snapshot
             isMoving = true;
 
             // Cancel any pending high-quality redraw that would cause lag during the slide
@@ -1670,10 +1712,13 @@ canvas.addEventListener('touchend', (e) => {
                     draw();
                     inertiaAnimationId = requestAnimationFrame(inertiaLoop);
                 } else {
-                    // Motion COMPLETELY stopped - render full quality now
+                    // Motion COMPLETELY stopped - discard snapshot and render full quality
                     isMoving = false;
                     velocityX = velocityY = 0;
                     inertiaAnimationId = null;
+                    
+                    // === DISCARD SNAPSHOT AND DO FINAL HIGH-QUALITY RENDER ===
+                    discardSnapshot();
                     draw(); // Final single high-quality render
                 }
             }
@@ -1682,6 +1727,9 @@ canvas.addEventListener('touchend', (e) => {
             // No significant velocity - stop immediately
             isMoving = false;
             velocityX = velocityY = 0;
+            
+            // === DISCARD SNAPSHOT AND DO FINAL HIGH-QUALITY RENDER ===
+            discardSnapshot();
             draw();
         }
     } else {
@@ -1709,6 +1757,10 @@ canvas.addEventListener('touchcancel', (e) => {
         cancelAnimationFrame(inertiaAnimationId);
         inertiaAnimationId = null;
     }
+    
+    // === DISCARD SNAPSHOT ON CANCEL ===
+    discardSnapshot();
+    
     // Reset all touch and smoothness state
     touchStartPos = null;
     isTouchPanning = false;
