@@ -167,6 +167,13 @@ const TREE_HEIGHT = 613;
 const NODE_OFFSET_X = 30;
 const NODE_OFFSET_Y = 30;
 
+// === PERFORMANCE OPTIMIZATION (Mobile) ===
+const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 768;
+let lastDrawTime = 0;
+const MOBILE_FRAME_DELAY = 32; // ~30fps on mobile (vs 60fps desktop)
+let pendingDraw = false;
+let iconsLoaded = false;
+
 // === INITIALIZE STATE ===
 function initializeState() {
     state.skills = {};
@@ -186,10 +193,42 @@ function initializeState() {
 // === PRELOAD ICONS ===
 function preloadIcons() {
     const iconBasePath = 'assets/skill-icons/';
-    for (const skillId of Object.keys(state.skills)) {
-        const img = new Image();
-        img.src = `${iconBasePath}${skillId}.png`;
-        loadedImages[skillId] = img;
+    const skillIds = Object.keys(state.skills);
+
+    if (isMobile) {
+        // Lazy load icons on mobile - load in batches
+        let loadedCount = 0;
+        const batchSize = 5;
+
+        function loadBatch(startIndex) {
+            const endIndex = Math.min(startIndex + batchSize, skillIds.length);
+            for (let i = startIndex; i < endIndex; i++) {
+                const skillId = skillIds[i];
+                const img = new Image();
+                img.onload = () => {
+                    loadedCount++;
+                    if (loadedCount === skillIds.length) {
+                        iconsLoaded = true;
+                        draw(); // Redraw once all icons loaded
+                    }
+                };
+                img.src = `${iconBasePath}${skillId}.png`;
+                loadedImages[skillId] = img;
+            }
+            // Schedule next batch
+            if (endIndex < skillIds.length) {
+                setTimeout(() => loadBatch(endIndex), 50);
+            }
+        }
+        loadBatch(0);
+    } else {
+        // Desktop: load all icons immediately
+        for (const skillId of skillIds) {
+            const img = new Image();
+            img.src = `${iconBasePath}${skillId}.png`;
+            loadedImages[skillId] = img;
+        }
+        iconsLoaded = true;
     }
 }
 
@@ -257,14 +296,18 @@ function drawSvgPath(ctx, pathStr, offsetX, offsetY) {
 
 // === CANVAS RESIZE ===
 function resize() {
-    const dpr = window.devicePixelRatio || 1;
+    // On mobile, use reduced DPR (max 1.5) for better performance
+    // On desktop, use full DPR for crisp rendering
+    const fullDpr = window.devicePixelRatio || 1;
+    const dpr = isMobile ? Math.min(fullDpr, 1.5) : fullDpr;
+
     canvas.width = window.innerWidth * dpr;
     canvas.height = window.innerHeight * dpr;
     canvas.style.width = window.innerWidth + 'px';
     canvas.style.height = window.innerHeight + 'px';
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.scale(dpr, dpr);
-    draw();
+    drawImmediate(); // Bypass throttle for resize
 }
 
 // === GET NODE STATE ===
@@ -359,7 +402,29 @@ function getCategoryColor(category) {
 }
 
 // === DRAWING ===
+// Throttled draw function for mobile performance
 function draw() {
+    if (isMobile) {
+        // Throttle draw calls on mobile
+        const now = performance.now();
+        if (now - lastDrawTime < MOBILE_FRAME_DELAY) {
+            // Schedule a draw if not already pending
+            if (!pendingDraw) {
+                pendingDraw = true;
+                requestAnimationFrame(() => {
+                    pendingDraw = false;
+                    drawImmediate();
+                });
+            }
+            return;
+        }
+        lastDrawTime = now;
+    }
+    drawImmediate();
+}
+
+// Actual draw implementation
+function drawImmediate() {
     const w = window.innerWidth;
     const h = window.innerHeight;
 
@@ -367,12 +432,14 @@ function draw() {
     ctx.fillStyle = COLORS.background;
     ctx.fillRect(0, 0, w, h);
 
-    // Add subtle gradient
-    const grd = ctx.createRadialGradient(w / 2, h * 0.8, 0, w / 2, h / 2, Math.max(w, h));
-    grd.addColorStop(0, 'rgba(15, 18, 30, 0.3)');
-    grd.addColorStop(1, 'rgba(6, 5, 5, 0.8)');
-    ctx.fillStyle = grd;
-    ctx.fillRect(0, 0, w, h);
+    // Add subtle gradient (skip on mobile for performance)
+    if (!isMobile) {
+        const grd = ctx.createRadialGradient(w / 2, h * 0.8, 0, w / 2, h / 2, Math.max(w, h));
+        grd.addColorStop(0, 'rgba(15, 18, 30, 0.3)');
+        grd.addColorStop(1, 'rgba(6, 5, 5, 0.8)');
+        ctx.fillStyle = grd;
+        ctx.fillRect(0, 0, w, h);
+    }
 
     // Calculate transform - center the tree
     const tx = (w - TREE_WIDTH * scale) / 2 + offsetX;
