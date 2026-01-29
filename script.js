@@ -202,23 +202,25 @@ const NODE_OFFSET_Y = 30;
 const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 768;
 let lastDrawTime = 0;
 const MOBILE_FRAME_DELAY = 16; // ~60fps target, but throttled during motion
-const MOBILE_MOTION_FRAME_DELAY = 24; // ~40fps during active panning/zooming
+const MOBILE_MOTION_FRAME_DELAY = 32; // ~30fps during active panning/zooming (reduced from 24ms for smoother feel)
 let pendingDraw = false;
 let iconsLoaded = false;
 let motionDPR = 1; // Lower DPR used during motion on mobile
 let staticDPR = 1; // Full DPR used when static
+let rafId = null; // Track RAF to prevent duplicate draws
 
 // === MOBILE SMOOTHNESS STATE (Phase 3 Optimization) ===
 let isMoving = false;                   // Motion state for shadow throttling
 let velocityX = 0, velocityY = 0;       // For inertia panning
 let lastTouchX = 0, lastTouchY = 0;     // Last touch position
 let lastTouchMoveTime = 0;              // For velocity calculation
-const FRICTION = 0.95;                  // Momentum decay per frame (higher = slides longer, smoother stop)
-const VELOCITY_THRESHOLD = 0.3;         // Min velocity to start inertia (lower = more responsive)
+const FRICTION = 0.92;                  // Momentum decay per frame (reduced from 0.95 for quicker stop)
+const VELOCITY_THRESHOLD = 0.5;         // Min velocity to start inertia (increased from 0.3 to reduce jank)
 let targetScale = 1;                    // For smooth zoom lerp
 const ZOOM_LERP_FACTOR = 0.18;          // Zoom smoothing factor (higher = faster zoom)
 let inertiaAnimationId = null;          // RAF ID for cleanup
 let motionEndTimeout = null;            // Timeout for motion end detection
+let touchMoveThrottle = 0;              // Throttle touch move events
 
 // Helper: Schedule a high-quality redraw after motion stops
 function scheduleHighQualityRedraw() {
@@ -473,6 +475,11 @@ function getCategoryColor(category) {
 // Throttled draw function for mobile performance
 function draw() {
     if (isMobile) {
+        // Cancel any pending draw to prevent stacking
+        if (rafId) {
+            cancelAnimationFrame(rafId);
+        }
+        
         // Use more aggressive throttling during motion
         const frameDelay = isMoving ? MOBILE_MOTION_FRAME_DELAY : MOBILE_FRAME_DELAY;
         const now = performance.now();
@@ -480,8 +487,9 @@ function draw() {
             // Schedule a draw if not already pending
             if (!pendingDraw) {
                 pendingDraw = true;
-                requestAnimationFrame(() => {
+                rafId = requestAnimationFrame(() => {
                     pendingDraw = false;
+                    rafId = null;
                     drawImmediate();
                 });
             }
@@ -510,11 +518,11 @@ function drawImmediate() {
         ctx.fillRect(0, 0, w, h);
     }
 
-    // === MOBILE CACHING: Only use cache during active motion ===
-    // Cache is used during pan/zoom for smooth 60fps, but we always
-    // render fully when static to ensure accurate display
-    if (isMobile && isMoving && cacheCanvas && !cacheNeedsUpdate) {
-        // Fast path: just copy the cached tree image during motion
+    // === MOBILE CACHING: Use cache whenever possible ===
+    // Cache is used during pan/zoom for smooth 60fps
+    // Only rebuild cache when skills actually change (not on every pan/zoom)
+    if (isMobile && cacheCanvas && !cacheNeedsUpdate && iconsLoaded) {
+        // Fast path: just copy the cached tree image
         drawFromCache();
         return;
     }
@@ -533,8 +541,8 @@ function drawImmediate() {
     // === MOBILE MOTION OPTIMIZATION: Skip non-essential details during motion ===
     const skipDetails = isMobile && isMoving;
 
-    // Disable image smoothing during motion for faster rendering
-    if (skipDetails) {
+    // Disable image smoothing on mobile for faster rendering (always, not just during motion)
+    if (isMobile) {
         ctx.imageSmoothingEnabled = false;
     }
 
@@ -575,8 +583,8 @@ function drawImmediate() {
     // Draw branch labels
     drawBranchLabels();
 
-    // Restore image smoothing
-    if (skipDetails) {
+    // Restore image smoothing (only if we're on desktop)
+    if (!isMobile && skipDetails) {
         ctx.imageSmoothingEnabled = true;
     }
 
@@ -584,15 +592,20 @@ function drawImmediate() {
 
     // === MOBILE: Build cache AFTER rendering to screen ===
     // This ensures the user always sees content first, then we cache for smooth motion
-    if (isMobile && cacheNeedsUpdate && !isMoving) {
-        // Use requestAnimationFrame to build cache asynchronously
-        // This prevents blocking the current render
-        requestAnimationFrame(() => {
+    if (isMobile && cacheNeedsUpdate && !isMoving && iconsLoaded) {
+        // Use requestIdleCallback if available, otherwise RAF
+        const buildCache = () => {
             if (cacheNeedsUpdate) {
                 updateTreeCache();
                 cacheNeedsUpdate = false;
             }
-        });
+        };
+        
+        if ('requestIdleCallback' in window) {
+            requestIdleCallback(buildCache, { timeout: 100 });
+        } else {
+            requestAnimationFrame(buildCache);
+        }
     }
 }
 
@@ -1040,6 +1053,9 @@ function drawNode(skill, category) {
     const isUnlocked = !isLocked && s.currentLevel === 0;
 
     ctx.save();
+    
+    // Mobile optimization: Skip hover effects during motion
+    const skipHover = isMobile && isMoving;
 
     // For large nodes, draw outer ring when maxed
     if (isLarge && isMaxed) {
@@ -1074,8 +1090,8 @@ function drawNode(skill, category) {
     if (isLocked) {
         // Locked: grey border
         ctx.strokeStyle = COLORS.disabled;
-    } else if (isHovered && !isMaxed) {
-        // Hover on non-maxed: grey border
+    } else if (isHovered && !isMaxed && !skipHover) {
+        // Hover on non-maxed: grey border (skip during motion on mobile)
         ctx.strokeStyle = COLORS.disabled;
     } else {
         // Normal state or maxed: branch color border
@@ -1107,24 +1123,41 @@ function drawNode(skill, category) {
             ctx.restore();
         } else if (isActive) {
             // Active: branch color icon background
-            ctx.globalCompositeOperation = 'source-over';
-            ctx.fillStyle = color;
-            ctx.fill();
+            // Mobile optimization: Use simpler rendering during motion
+            if (isMobile && isMoving) {
+                // Simplified: just draw icon with opacity
+                ctx.globalAlpha = 0.9;
+                ctx.drawImage(img, x - iconSize / 2, y - iconSize / 2, iconSize, iconSize);
+                ctx.globalAlpha = 1;
+                ctx.restore();
+            } else {
+                ctx.globalCompositeOperation = 'source-over';
+                ctx.fillStyle = color;
+                ctx.fill();
 
-            // Use mask technique - icon acts as mask
-            ctx.globalCompositeOperation = 'destination-in';
-            ctx.drawImage(img, x - iconSize / 2, y - iconSize / 2, iconSize, iconSize);
-            ctx.restore();
+                // Use mask technique - icon acts as mask
+                ctx.globalCompositeOperation = 'destination-in';
+                ctx.drawImage(img, x - iconSize / 2, y - iconSize / 2, iconSize, iconSize);
+                ctx.restore();
+            }
         } else {
             // Locked or Unlocked: grey icon (white on dark)
-            ctx.globalCompositeOperation = 'source-over';
-            ctx.fillStyle = isLocked ? '#666666' : '#AAAAAA';
-            ctx.fill();
+            // Mobile optimization: Use simpler rendering during motion
+            if (isMobile && isMoving) {
+                ctx.globalAlpha = 0.6;
+                ctx.drawImage(img, x - iconSize / 2, y - iconSize / 2, iconSize, iconSize);
+                ctx.globalAlpha = 1;
+                ctx.restore();
+            } else {
+                ctx.globalCompositeOperation = 'source-over';
+                ctx.fillStyle = isLocked ? '#666666' : '#AAAAAA';
+                ctx.fill();
 
-            // Use mask technique - icon acts as mask
-            ctx.globalCompositeOperation = 'destination-in';
-            ctx.drawImage(img, x - iconSize / 2, y - iconSize / 2, iconSize, iconSize);
-            ctx.restore();
+                // Use mask technique - icon acts as mask
+                ctx.globalCompositeOperation = 'destination-in';
+                ctx.drawImage(img, x - iconSize / 2, y - iconSize / 2, iconSize, iconSize);
+                ctx.restore();
+            }
         }
     }
 
@@ -1455,6 +1488,13 @@ canvas.addEventListener('touchmove', (e) => {
     if (e.touches.length === 1 && touchStartPos) {
         const touch = e.touches[0];
         const now = performance.now();
+        
+        // Throttle touchmove events on mobile (every other frame)
+        if (isMobile) {
+            touchMoveThrottle++;
+            if (touchMoveThrottle % 2 !== 0) return;
+        }
+        
         const dx = touch.clientX - touchStartPos.x;
         const dy = touch.clientY - touchStartPos.y;
         const distance = Math.sqrt(dx * dx + dy * dy);
