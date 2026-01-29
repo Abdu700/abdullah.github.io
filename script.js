@@ -481,31 +481,56 @@ function drawImmediate() {
     // Draw root lines (the main trunk)
     drawRootLines();
 
-    // Draw edges for each category - Pass 1: Inactive edges
-    for (const [category, data] of Object.entries(SKILL_DATA)) {
-        for (const edge of data.edges) {
-            drawEdge(edge, category, false);
+    // Mobile motion optimization: skip inactive edges during movement
+    const skipInactiveEdges = isMobile && isMoving;
+
+    // Draw edges for each category - Pass 1: Inactive edges (skip during mobile motion)
+    if (!skipInactiveEdges) {
+        for (const [category, data] of Object.entries(SKILL_DATA)) {
+            for (const edge of data.edges) {
+                drawEdge(edge, category, false);
+            }
         }
     }
 
-    // Draw edges for each category - Pass 2: Active edges (Bring to Front)
+    // Draw edges for each category - Pass 2: Active edges (always draw)
     for (const [category, data] of Object.entries(SKILL_DATA)) {
         for (const edge of data.edges) {
             drawEdge(edge, category, true);
         }
     }
 
-    // Draw nodes for each category
+    // Viewport culling: calculate visible area in tree coordinates
+    const viewLeft = -tx / scale - 50;  // Add margin for node size
+    const viewRight = (w - tx) / scale + 50;
+    const viewTop = -ty / scale - 50;
+    const viewBottom = (h - ty) / scale + 50;
+
+    // Draw nodes for each category (with viewport culling)
     for (const [category, data] of Object.entries(SKILL_DATA)) {
         for (const skill of data.skills) {
+            // Viewport culling - skip nodes outside visible area
+            const nodeX = skill.x + NODE_OFFSET_X;
+            const nodeY = skill.y + NODE_OFFSET_Y;
+            if (nodeX < viewLeft || nodeX > viewRight || nodeY < viewTop || nodeY > viewBottom) {
+                continue; // Skip off-screen nodes
+            }
             drawNode(skill, category);
         }
     }
 
-    // Draw badges (after all nodes/edges to be on top)
-    for (const [category, data] of Object.entries(SKILL_DATA)) {
-        for (const skill of data.skills) {
-            drawNodeBadge(skill, category);
+    // Draw badges (skip during mobile motion for performance)
+    if (!(isMobile && isMoving)) {
+        for (const [category, data] of Object.entries(SKILL_DATA)) {
+            for (const skill of data.skills) {
+                // Viewport culling for badges too
+                const nodeX = skill.x + NODE_OFFSET_X;
+                const nodeY = skill.y + NODE_OFFSET_Y;
+                if (nodeX < viewLeft || nodeX > viewRight || nodeY < viewTop || nodeY > viewBottom) {
+                    continue;
+                }
+                drawNodeBadge(skill, category);
+            }
         }
     }
 
@@ -705,43 +730,59 @@ function drawNode(skill, category) {
     const img = loadedImages[skill.id];
 
     if (img && img.complete && img.naturalWidth > 0) {
-        ctx.save();
-        ctx.beginPath();
-        ctx.arc(x, y, size - 3, 0, Math.PI * 2);
-        ctx.clip();
-
-        // Icon background color based on state:
-        // Locked: grey icon (white/light grey on dark bg)
-        // Unlocked: grey icon
-        // Active: branch color icon background
-        // Maxed: black icon background
-
-        if (isMaxed) {
-            // Use filter for crisp black icon (no shadow throttling for maxed - filter is not the main bottleneck)
-            ctx.filter = 'brightness(0)';
-            ctx.drawImage(img, x - iconSize / 2, y - iconSize / 2, iconSize, iconSize);
-            ctx.filter = 'none';
-            ctx.restore();
-        } else if (isActive) {
-            // Active: branch color icon background
-            ctx.globalCompositeOperation = 'source-over';
-            ctx.fillStyle = color;
+        // MOBILE MOTION: Use simplified rendering (skip clip, compositing, filters)
+        if (isMobile && isMoving) {
+            // Fast path: just draw a colored circle, no icon detail
+            ctx.beginPath();
+            ctx.arc(x, y, size - 3, 0, Math.PI * 2);
+            if (isMaxed) {
+                ctx.fillStyle = '#000000';
+            } else if (isActive) {
+                ctx.fillStyle = color;
+            } else {
+                ctx.fillStyle = isLocked ? '#444444' : '#666666';
+            }
             ctx.fill();
-
-            // Use mask technique - icon acts as mask
-            ctx.globalCompositeOperation = 'destination-in';
-            ctx.drawImage(img, x - iconSize / 2, y - iconSize / 2, iconSize, iconSize);
-            ctx.restore();
         } else {
-            // Locked or Unlocked: grey icon (white on dark)
-            ctx.globalCompositeOperation = 'source-over';
-            ctx.fillStyle = isLocked ? '#666666' : '#AAAAAA';
-            ctx.fill();
+            // Full quality path with clipping and compositing
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(x, y, size - 3, 0, Math.PI * 2);
+            ctx.clip();
 
-            // Use mask technique - icon acts as mask
-            ctx.globalCompositeOperation = 'destination-in';
-            ctx.drawImage(img, x - iconSize / 2, y - iconSize / 2, iconSize, iconSize);
-            ctx.restore();
+            // Icon background color based on state:
+            // Locked: grey icon (white/light grey on dark bg)
+            // Unlocked: grey icon
+            // Active: branch color icon background
+            // Maxed: black icon background
+
+            if (isMaxed) {
+                // Use filter for crisp black icon
+                ctx.filter = 'brightness(0)';
+                ctx.drawImage(img, x - iconSize / 2, y - iconSize / 2, iconSize, iconSize);
+                ctx.filter = 'none';
+                ctx.restore();
+            } else if (isActive) {
+                // Active: branch color icon background
+                ctx.globalCompositeOperation = 'source-over';
+                ctx.fillStyle = color;
+                ctx.fill();
+
+                // Use mask technique - icon acts as mask
+                ctx.globalCompositeOperation = 'destination-in';
+                ctx.drawImage(img, x - iconSize / 2, y - iconSize / 2, iconSize, iconSize);
+                ctx.restore();
+            } else {
+                // Locked or Unlocked: grey icon (white on dark)
+                ctx.globalCompositeOperation = 'source-over';
+                ctx.fillStyle = isLocked ? '#666666' : '#AAAAAA';
+                ctx.fill();
+
+                // Use mask technique - icon acts as mask
+                ctx.globalCompositeOperation = 'destination-in';
+                ctx.drawImage(img, x - iconSize / 2, y - iconSize / 2, iconSize, iconSize);
+                ctx.restore();
+            }
         }
     }
 
