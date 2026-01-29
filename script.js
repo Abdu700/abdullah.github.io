@@ -600,42 +600,47 @@ function updateTreeCache() {
     // Temporarily redirect drawing to cache
     ctx = cacheCtx;
 
-    drawRootLines();
+    // CRITICAL: Use try-finally to ensure ctx is ALWAYS restored
+    // If any drawing function throws an error, ctx would stay pointing to cacheCtx
+    // causing all subsequent rendering to go to the invisible cache canvas
+    try {
+        drawRootLines();
 
-    // Draw edges - Pass 1: Inactive
-    for (const [category, data] of Object.entries(SKILL_DATA)) {
-        for (const edge of data.edges) {
-            drawEdge(edge, category, false);
+        // Draw edges - Pass 1: Inactive
+        for (const [category, data] of Object.entries(SKILL_DATA)) {
+            for (const edge of data.edges) {
+                drawEdge(edge, category, false);
+            }
         }
-    }
 
-    // Draw edges - Pass 2: Active
-    for (const [category, data] of Object.entries(SKILL_DATA)) {
-        for (const edge of data.edges) {
-            drawEdge(edge, category, true);
+        // Draw edges - Pass 2: Active
+        for (const [category, data] of Object.entries(SKILL_DATA)) {
+            for (const edge of data.edges) {
+                drawEdge(edge, category, true);
+            }
         }
-    }
 
-    // Draw nodes
-    for (const [category, data] of Object.entries(SKILL_DATA)) {
-        for (const skill of data.skills) {
-            drawNode(skill, category);
+        // Draw nodes
+        for (const [category, data] of Object.entries(SKILL_DATA)) {
+            for (const skill of data.skills) {
+                drawNode(skill, category);
+            }
         }
-    }
 
-    // Draw badges
-    for (const [category, data] of Object.entries(SKILL_DATA)) {
-        for (const skill of data.skills) {
-            drawNodeBadge(skill, category);
+        // Draw badges
+        for (const [category, data] of Object.entries(SKILL_DATA)) {
+            for (const skill of data.skills) {
+                drawNodeBadge(skill, category);
+            }
         }
+
+        // Draw branch labels
+        drawBranchLabels();
+    } finally {
+        // Restore original context - this MUST happen even if drawing fails
+        ctx = originalCtx;
+        cacheCtx.restore();
     }
-
-    // Draw branch labels
-    drawBranchLabels();
-
-    // Restore original context
-    ctx = originalCtx;
-    cacheCtx.restore();
 
     cacheScale = scale;
 }
