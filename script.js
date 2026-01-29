@@ -565,19 +565,15 @@ function drawImmediate() {
         }
     }
 
-    // Draw badges - SKIP during motion on mobile (reduces ~45 draw calls)
-    if (!skipDetails) {
-        for (const [category, data] of Object.entries(SKILL_DATA)) {
-            for (const skill of data.skills) {
-                drawNodeBadge(skill, category);
-            }
+    // Draw badges
+    for (const [category, data] of Object.entries(SKILL_DATA)) {
+        for (const skill of data.skills) {
+            drawNodeBadge(skill, category);
         }
     }
 
-    // Draw branch labels - SKIP during motion on mobile (reduces text rendering)
-    if (!skipDetails) {
-        drawBranchLabels();
-    }
+    // Draw branch labels
+    drawBranchLabels();
 
     // Restore image smoothing
     if (skipDetails) {
