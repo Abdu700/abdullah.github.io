@@ -31,6 +31,12 @@ let cacheCtx = null;
 let cacheNeedsUpdate = true; // Flag to trigger cache rebuild
 let cacheScale = 1; // Scale at which cache was rendered
 
+// === PRE-RENDERED TEXT CACHE (Mobile Performance) ===
+// Text rendering is EXTREMELY expensive on mobile - pre-render once and reuse
+let textCacheCanvas = null;
+let textCacheCtx = null;
+let textCacheNeedsUpdate = true;
+
 // === COLORS ===
 const COLORS = {
     conditioning: '#12FF70',
@@ -532,17 +538,23 @@ function drawImmediate() {
         ctx.imageSmoothingEnabled = false;
     }
 
-    // Draw edges for each category - Pass 1: Inactive edges
-    for (const [category, data] of Object.entries(SKILL_DATA)) {
-        for (const edge of data.edges) {
-            drawEdge(edge, category, false);
+    // === EDGE DRAWING ===
+    // MOBILE: Use batched edge drawing (4 stroke calls instead of 90+)
+    // DESKTOP: Use individual edge drawing (more flexible for hover effects)
+    if (isMobile) {
+        drawEdgesBatched();
+    } else {
+        // Draw edges for each category - Pass 1: Inactive edges
+        for (const [category, data] of Object.entries(SKILL_DATA)) {
+            for (const edge of data.edges) {
+                drawEdge(edge, category, false);
+            }
         }
-    }
-
-    // Draw edges for each category - Pass 2: Active edges (Bring to Front)
-    for (const [category, data] of Object.entries(SKILL_DATA)) {
-        for (const edge of data.edges) {
-            drawEdge(edge, category, true);
+        // Draw edges for each category - Pass 2: Active edges (Bring to Front)
+        for (const [category, data] of Object.entries(SKILL_DATA)) {
+            for (const edge of data.edges) {
+                drawEdge(edge, category, true);
+            }
         }
     }
 
@@ -700,6 +712,7 @@ function drawFromCache() {
 // Invalidate cache (call when skills change)
 function invalidateCache() {
     cacheNeedsUpdate = true;
+    textCacheNeedsUpdate = true; // Also invalidate text cache when skills change
 }
 
 function drawRootLines() {
@@ -734,44 +747,233 @@ function drawRootLines() {
     ctx.restore();
 }
 
+// === PRE-RENDER TEXT TO CACHE (Mobile Performance) ===
+// fillText is one of the most expensive canvas operations on mobile
+// Pre-render text once and copy the image instead
+function updateTextCache() {
+    const labelWidth = 200;
+    const labelHeight = 100;
+    const totalWidth = labelWidth * 3; // 3 labels side by side
+
+    if (!textCacheCanvas) {
+        textCacheCanvas = document.createElement('canvas');
+        textCacheCtx = textCacheCanvas.getContext('2d');
+    }
+
+    textCacheCanvas.width = totalWidth;
+    textCacheCanvas.height = labelHeight;
+
+    // Clear with transparency
+    textCacheCtx.clearRect(0, 0, totalWidth, labelHeight);
+    textCacheCtx.textAlign = 'center';
+
+    // Pre-render Conditioning label
+    textCacheCtx.fillStyle = COLORS.conditioning;
+    textCacheCtx.font = '600 24px Urbanist, sans-serif';
+    textCacheCtx.globalAlpha = 0.9;
+    textCacheCtx.fillText('CONDITIONING', labelWidth * 0.5, 30);
+    textCacheCtx.font = 'bold 38px Barlow, sans-serif';
+    textCacheCtx.globalAlpha = 1;
+    textCacheCtx.fillText(state.pointsSpent.Conditioning.toString(), labelWidth * 0.5, 75);
+
+    // Pre-render Mobility label
+    textCacheCtx.fillStyle = COLORS.mobility;
+    textCacheCtx.font = '600 24px Urbanist, sans-serif';
+    textCacheCtx.globalAlpha = 0.9;
+    textCacheCtx.fillText('MOBILITY', labelWidth * 1.5, 30);
+    textCacheCtx.font = 'bold 38px Barlow, sans-serif';
+    textCacheCtx.globalAlpha = 1;
+    textCacheCtx.fillText(state.pointsSpent.Mobility.toString(), labelWidth * 1.5, 75);
+
+    // Pre-render Survival label
+    textCacheCtx.fillStyle = COLORS.survival;
+    textCacheCtx.font = '600 24px Urbanist, sans-serif';
+    textCacheCtx.globalAlpha = 0.9;
+    textCacheCtx.fillText('SURVIVAL', labelWidth * 2.5, 30);
+    textCacheCtx.font = 'bold 38px Barlow, sans-serif';
+    textCacheCtx.globalAlpha = 1;
+    textCacheCtx.fillText(state.pointsSpent.Survival.toString(), labelWidth * 2.5, 75);
+
+    textCacheNeedsUpdate = false;
+}
+
 function drawBranchLabels() {
     // Draw branch labels on the Canvas (inside transform, so they pan/zoom with tree)
-    // Positions based on user request:
-    // - Conditioning: under blast-born (x: 424, y: 539)
-    // - Mobility: middle between four nodes around (658, 372)
-    // - Survival: under revitalizing-squat (x: 930, y: 563), slightly left
+    // Positions:
+    // - Conditioning: (454, 623)
+    // - Mobility: (681, 386)
+    // - Survival: (908, 643)
 
+    const labelWidth = 200;
+    const labelHeight = 100;
+
+    // MOBILE: Use pre-rendered text cache for much faster rendering
+    if (isMobile) {
+        // Update text cache if needed
+        if (textCacheNeedsUpdate) {
+            updateTextCache();
+        }
+
+        // Draw cached text images (MUCH faster than fillText)
+        // Conditioning
+        ctx.drawImage(textCacheCanvas,
+            0, 0, labelWidth, labelHeight,
+            454 - labelWidth / 2, 623 - 30, labelWidth, labelHeight);
+        // Mobility
+        ctx.drawImage(textCacheCanvas,
+            labelWidth, 0, labelWidth, labelHeight,
+            681 - labelWidth / 2, 386 - 30, labelWidth, labelHeight);
+        // Survival
+        ctx.drawImage(textCacheCanvas,
+            labelWidth * 2, 0, labelWidth, labelHeight,
+            908 - labelWidth / 2, 643 - 30, labelWidth, labelHeight);
+        return;
+    }
+
+    // DESKTOP: Draw text directly (no performance issue)
     ctx.save();
     ctx.textAlign = 'center';
 
-    // Conditioning label - under blast-born (bolder and bigger)
+    // Conditioning label
     ctx.fillStyle = COLORS.conditioning;
     ctx.font = '600 24px Urbanist, sans-serif';
     ctx.globalAlpha = 0.9;
-    ctx.fillText('CONDITIONING', Math.round(454), Math.round(623));
+    ctx.fillText('CONDITIONING', 454, 623);
     ctx.font = 'bold 38px Barlow, sans-serif';
     ctx.globalAlpha = 1;
-    ctx.fillText(state.pointsSpent.Conditioning.toString(), Math.round(454), Math.round(668));
+    ctx.fillText(state.pointsSpent.Conditioning.toString(), 454, 668);
 
-    // Mobility label - in the middle (bolder and bigger) - moved +3px right, +3px down
+    // Mobility label
     ctx.fillStyle = COLORS.mobility;
     ctx.font = '600 24px Urbanist, sans-serif';
     ctx.globalAlpha = 0.9;
-    ctx.fillText('MOBILITY', Math.round(681), Math.round(386));
+    ctx.fillText('MOBILITY', 681, 386);
     ctx.font = 'bold 38px Barlow, sans-serif';
     ctx.globalAlpha = 1;
-    ctx.fillText(state.pointsSpent.Mobility.toString(), Math.round(681), Math.round(431));
+    ctx.fillText(state.pointsSpent.Mobility.toString(), 681, 431);
 
-    // Survival label - under revitalizing-squat, slightly left (bolder and bigger)
+    // Survival label
     ctx.fillStyle = COLORS.survival;
     ctx.font = '600 24px Urbanist, sans-serif';
     ctx.globalAlpha = 0.9;
-    ctx.fillText('SURVIVAL', Math.round(908), Math.round(643));
+    ctx.fillText('SURVIVAL', 908, 643);
     ctx.font = 'bold 38px Barlow, sans-serif';
     ctx.globalAlpha = 1;
-    ctx.fillText(state.pointsSpent.Survival.toString(), Math.round(908), Math.round(688));
+    ctx.fillText(state.pointsSpent.Survival.toString(), 908, 688);
 
     ctx.restore();
+}
+
+// === BATCHED EDGE DRAWING (Mobile Performance) ===
+// Instead of calling beginPath/stroke for each edge (90+ calls),
+// we batch edges by color and call stroke once per batch (4 calls)
+// This provides HUGE performance gains per the canvas performance article
+function drawEdgesBatched() {
+    // Group edges by their visual state: inactive (grey) or active (colored)
+    const inactiveEdges = [];
+    const activeEdgesByColor = {
+        [COLORS.conditioning]: [],
+        [COLORS.mobility]: [],
+        [COLORS.survival]: []
+    };
+
+    // Categorize all edges
+    for (const [category, data] of Object.entries(SKILL_DATA)) {
+        const color = getCategoryColor(category);
+        for (const edge of data.edges) {
+            const fromSkill = state.skills[edge.from];
+            const toSkill = state.skills[edge.to];
+
+            const fromHasPoints = fromSkill.currentLevel > 0;
+            const toIsActiveOrMaxed = toSkill.currentLevel > 0;
+            const toRequiresFrom = toSkill.requiredSkill &&
+                (Array.isArray(toSkill.requiredSkill)
+                    ? toSkill.requiredSkill.includes(edge.from)
+                    : toSkill.requiredSkill === edge.from);
+            const toSkillObj = Object.values(SKILL_DATA).flatMap(d => d.skills).find(s => s.id === edge.to);
+            const toIsUnlocked = toSkillObj ? canUpgrade(toSkillObj) : false;
+
+            const isActive = fromHasPoints && (toIsActiveOrMaxed || (toRequiresFrom && toIsUnlocked));
+
+            if (isActive) {
+                activeEdgesByColor[color].push(edge);
+            } else {
+                inactiveEdges.push(edge);
+            }
+        }
+    }
+
+    ctx.lineCap = 'round';
+
+    // Draw all inactive edges with one stroke (BATCH #1)
+    if (inactiveEdges.length > 0) {
+        ctx.beginPath();
+        for (const edge of inactiveEdges) {
+            drawSvgPathNoBatch(edge.path, Math.round(edge.x), Math.round(edge.y));
+        }
+        ctx.strokeStyle = COLORS.lineDark;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+    }
+
+    // Draw active edges by color (BATCHES #2-4)
+    for (const [color, edges] of Object.entries(activeEdgesByColor)) {
+        if (edges.length > 0) {
+            ctx.beginPath();
+            for (const edge of edges) {
+                drawSvgPathNoBatch(edge.path, Math.round(edge.x), Math.round(edge.y));
+            }
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 8;
+            ctx.stroke();
+        }
+    }
+}
+
+// Helper: Add path commands without beginPath (for batching)
+function drawSvgPathNoBatch(pathStr, offsetX, offsetY) {
+    const commands = parseSvgPath(pathStr);
+    let currentX = 0, currentY = 0;
+
+    for (const { cmd, args } of commands) {
+        switch (cmd) {
+            case 'M':
+                currentX = args[0];
+                currentY = args[1];
+                ctx.moveTo(offsetX + currentX, offsetY + currentY);
+                break;
+            case 'L':
+                currentX = args[0];
+                currentY = args[1];
+                ctx.lineTo(offsetX + currentX, offsetY + currentY);
+                break;
+            case 'H':
+                currentX = args[0];
+                ctx.lineTo(offsetX + currentX, offsetY + currentY);
+                break;
+            case 'V':
+                currentY = args[0];
+                ctx.lineTo(offsetX + currentX, offsetY + currentY);
+                break;
+            case 'C':
+                ctx.bezierCurveTo(
+                    offsetX + args[0], offsetY + args[1],
+                    offsetX + args[2], offsetY + args[3],
+                    offsetX + args[4], offsetY + args[5]
+                );
+                currentX = args[4];
+                currentY = args[5];
+                break;
+            case 'Q':
+                ctx.quadraticCurveTo(
+                    offsetX + args[0], offsetY + args[1],
+                    offsetX + args[2], offsetY + args[3]
+                );
+                currentX = args[2];
+                currentY = args[3];
+                break;
+        }
+    }
 }
 
 function drawEdge(edge, category, activeFilter) {
