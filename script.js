@@ -504,18 +504,13 @@ function drawImmediate() {
         ctx.fillRect(0, 0, w, h);
     }
 
-    // === MOBILE: Use cached canvas during motion ===
+    // === MOBILE CACHING: Only use cache during active motion ===
+    // Cache is used during pan/zoom for smooth 60fps, but we always
+    // render fully when static to ensure accurate display
     if (isMobile && isMoving && cacheCanvas && !cacheNeedsUpdate) {
-        // Fast path: just copy the cached tree image
+        // Fast path: just copy the cached tree image during motion
         drawFromCache();
         return;
-    }
-
-    // === Full render path ===
-    // On mobile, update cache if needed
-    if (isMobile && cacheNeedsUpdate) {
-        updateTreeCache();
-        cacheNeedsUpdate = false;
     }
 
     // Calculate transform - center the tree
@@ -562,7 +557,18 @@ function drawImmediate() {
 
     ctx.restore();
 
-    // Update branch counters (now drawn on canvas)
+    // === MOBILE: Build cache AFTER rendering to screen ===
+    // This ensures the user always sees content first, then we cache for smooth motion
+    if (isMobile && cacheNeedsUpdate && !isMoving) {
+        // Use requestAnimationFrame to build cache asynchronously
+        // This prevents blocking the current render
+        requestAnimationFrame(() => {
+            if (cacheNeedsUpdate) {
+                updateTreeCache();
+                cacheNeedsUpdate = false;
+            }
+        });
+    }
 }
 
 // === OFF-SCREEN CANVAS CACHING FUNCTIONS ===
